@@ -186,14 +186,19 @@ func TestRegionStateContentsCloneIsIndependentAndWritable(t *testing.T) {
 	state.contents[empty] = nil
 	state.deferred = pointees{first: false}
 	copy := state.clone()
-	copy.contents[owner][first] = false
-	copy.contents[owner][second] = true
-	copy.contents[empty][second] = false
+	// Contents sets are shared after a clone; changes go through writable.
+	copy.writable(owner)[first] = false
+	copy.writable(owner)[second] = true
+	copy.writable(empty)[second] = false
+	state.writable(owner)[first] = true
 	copy.deferred[first] = true
 	copy.deferred[second] = false
 	if !state.contents[owner][first] || len(state.contents[owner]) != 1 || state.contents[empty] != nil ||
 		state.deferred[first] || len(state.deferred) != 1 {
 		t.Fatal("changing stored or deferred snapshot evidence changed the original state")
+	}
+	if copy.contents[owner][first] || !copy.contents[owner][second] || len(copy.contents[empty]) != 1 {
+		t.Fatal("a writable set lost its change or took the original's")
 	}
 	copy = newRegionState().clone()
 	copy.deferred[first] = false

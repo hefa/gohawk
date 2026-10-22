@@ -15,8 +15,12 @@ import (
 
 // regionState is the memory state at one program point.
 type regionState struct {
-	// contents holds the known pointees of slots.
+	// contents holds the known pointees of slots. Clones share the sets;
+	// owned marks the sets this state may change in place, and writable
+	// copies any other set before a change. Every in-place change to a
+	// contents set must go through writable.
 	contents map[slot]pointees
+	owned    map[slot]bool
 	// backing records that a slot was filled by copying a snapshot whole,
 	// so its sub-slots without their own entry are the snapshot's.
 	backing map[slot]*region
@@ -63,6 +67,7 @@ type regionState struct {
 func newRegionState() *regionState {
 	return &regionState{
 		contents:   map[slot]pointees{},
+		owned:      map[slot]bool{},
 		backing:    map[slot]*region{},
 		stepEpochs: map[string]int{},
 		clobbered:  map[slot]int{},
@@ -92,9 +97,13 @@ func stepKey(path string) string {
 	return "self"
 }
 
+// clone shares the contents sets with the original, so neither may change
+// one in place afterwards without copying it first.
 func (state *regionState) clone() *regionState {
+	clear(state.owned)
 	result := &regionState{
-		contents:   make(map[slot]pointees, len(state.contents)),
+		contents:   cloneRegionMap(state.contents),
+		owned:      map[slot]bool{},
 		backing:    cloneRegionMap(state.backing),
 		epoch:      state.epoch,
 		reachEpoch: state.reachEpoch,
@@ -107,10 +116,29 @@ func (state *regionState) clone() *regionState {
 		deferred:   cloneRegionMap(state.deferred),
 		calls:      slices.Clone(state.calls),
 	}
-	for target, set := range state.contents {
-		result.contents[target] = cloneRegionMap(set)
-	}
 	return result
+}
+
+// writable returns the slot's contents set for an in-place change, copying
+// it first unless this state owns it. A missing slot stays missing.
+func (state *regionState) writable(target slot) pointees {
+	set, ok := state.contents[target]
+	if !ok || state.owned[target] {
+		return set
+	}
+	set = set.clone()
+	state.contents[target] = set
+	state.own(target)
+	return set
+}
+
+// own records that the slot's current set belongs to this state alone,
+// such as one it just allocated.
+func (state *regionState) own(target slot) {
+	if state.owned == nil {
+		state.owned = map[slot]bool{}
+	}
+	state.owned[target] = true
 }
 
 // cloneRegionMap copies flat state maps through the runtime's map clone rather
@@ -163,18 +191,20 @@ func (graph *regionGraph) mergeContents(state, other *regionState, backEdge bool
 		return stale || backEdge && createdInsideLoop(pointee.region, header)
 	}
 	for target, set := range other.contents {
-		mine, present := state.contents[target]
-		if !present {
+		mine := state.writable(target)
+		if mine == nil {
 			mine = graph.content(before, target)
 			state.contents[target] = mine
+			state.own(target)
 		}
 		for pointee, pointeeStale := range set {
 			mine.add(pointee, stale(pointee, pointeeStale))
 		}
 		graph.bound(state, target, nil)
 	}
-	for target, mine := range state.contents {
+	for target := range state.contents {
 		if _, present := other.contents[target]; !present {
+			mine := state.writable(target)
 			for pointee, pointeeStale := range graph.content(other, target) {
 				mine.add(pointee, stale(pointee, pointeeStale))
 			}

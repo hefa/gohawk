@@ -394,8 +394,12 @@ func (graph *regionGraph) fixpoint() (GraphBuildReason, string) {
 	}
 	graph.entry[function.Blocks[0]] = newRegionState()
 	out := map[*ssa.BasicBlock]*regionState{}
+	// unsettled explains a body that never settles: the blocks that still
+	// changed in the last round. Earlier rounds change on every ordinary
+	// loop, and describing those differences cost more than the transfers.
 	var unsettled []string
-	for range regionFixpointRounds {
+	for round := range regionFixpointRounds {
+		last := round == regionFixpointRounds-1
 		changed := false
 		for _, block := range graph.order {
 			in := graph.entryState(block, out)
@@ -411,7 +415,7 @@ func (graph *regionGraph) fixpoint() (GraphBuildReason, string) {
 			}
 			if previous, ok := out[block]; !ok || !previous.equal(state) {
 				changed = true
-				if ok {
+				if ok && last {
 					unsettled = append(unsettled, "block "+strconv.Itoa(block.Index)+": "+previous.difference(state))
 				}
 			}

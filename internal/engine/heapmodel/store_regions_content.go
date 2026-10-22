@@ -346,20 +346,21 @@ func (graph *regionGraph) weakElementStore(state *regionState, target slot, valu
 	// above it. Keeping that whole value would hide the updated element set.
 	graph.forgetWholeAbove(state, target)
 	graph.remember(target, value)
-	star := state.contents[target]
+	star := state.writable(target)
 	if star == nil {
 		// An unknown index may leave any particular element untouched.
 		// Preserve existing elements and the unwritten nil/foreign possibility
 		// before adding the new value; a wildcard store is never an exact fill.
 		star = graph.content(state, target)
 		state.contents[target] = star
+		state.own(target)
 	}
 	star.union(value)
 	graph.bound(state, target, nil)
 	parent := parentPath(target.path)
-	for other, set := range state.contents {
+	for other := range state.contents {
 		if other.region == target.region && other.path != target.path && parentPath(other.path) == parent && isIndexStep(lastStep(other.path)) {
-			set.union(value)
+			state.writable(other).union(value)
 			graph.bound(state, other, nil)
 		}
 	}
@@ -457,10 +458,11 @@ func (graph *regionGraph) storeSlot(state *regionState, target slot, value point
 		state.contents[target] = value.clone()
 		return
 	}
-	existing, ok := state.contents[target]
-	if !ok {
+	existing := state.writable(target)
+	if existing == nil {
 		existing = graph.content(state, target)
 		state.contents[target] = existing
+		state.own(target)
 	}
 	existing.union(value)
 	graph.bound(state, target, at)
