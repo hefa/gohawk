@@ -365,3 +365,120 @@ func (state *regionState) forgetStoredSubtree(target slot) {
 		}
 	}
 }
+
+// Loop widening. A loop that walks a structure reads one more unwritten
+// level each round, minting a placeholder for content(content(…)); a loop
+// whose effects carry different stamps reads the same slot as a new object
+// each round. The plain rounds then grow until pointeeLimit collapses each
+// set on its own, and large functions did not settle within the bound and
+// were unavailable. Once the plain rounds have not settled, every part of a
+// loop header's entry, and of its phis, that still changed since the previous
+// round takes a value that cannot change again: a pointee set becomes
+// unknown, which answers may-queries yes and must-queries no, and a stamp
+// becomes the header's own, as a join already stamps disagreeing effects.
+// Parts that only grow within finite bounds, such as escapes, settle
+// without help.
+
+// loopSnapshot is one round's loop-header entries and phi values, compared
+// against in the next widened round.
+type loopSnapshot struct {
+	entries map[*ssa.BasicBlock]*regionState
+	phis    map[*ssa.Phi]pointees
+}
+
+func newLoopSnapshot() *loopSnapshot {
+	return &loopSnapshot{entries: map[*ssa.BasicBlock]*regionState{}, phis: map[*ssa.Phi]pointees{}}
+}
+
+func (snapshot *loopSnapshot) recordEntry(header *ssa.BasicBlock, entry *regionState) {
+	snapshot.entries[header] = entry.clone()
+}
+
+func (snapshot *loopSnapshot) recordPhis(graph *regionGraph, headers map[*ssa.BasicBlock]bool) {
+	for header := range headers {
+		for _, instruction := range header.Instrs {
+			phi, ok := instruction.(*ssa.Phi)
+			if !ok {
+				break
+			}
+			if set, ok := graph.values[phi]; ok {
+				snapshot.phis[phi] = set.clone()
+			}
+		}
+	}
+}
+
+// loopHeaders returns the blocks a back edge enters: a predecessor the block
+// dominates. The entry block has no predecessors, so it is never one.
+func loopHeaders(function *ssa.Function) map[*ssa.BasicBlock]bool {
+	headers := map[*ssa.BasicBlock]bool{}
+	for _, block := range function.Blocks {
+		for _, predecessor := range block.Preds {
+			if block.Dominates(predecessor) {
+				headers[block] = true
+			}
+		}
+	}
+	return headers
+}
+
+// widen coarsens a loop header's entry wherever it differs from the previous
+// round's widened entry, so the next round cannot change it again.
+func (graph *regionGraph) widen(state, previous *regionState, header *ssa.BasicBlock) {
+	if previous == nil {
+		return
+	}
+	stamp := graph.blockID(header)
+	for target, set := range state.contents {
+		if old, ok := previous.contents[target]; ok && maps.Equal(old, set) || set.unknown() {
+			continue
+		}
+		graph.widened = append(graph.widened, widening{target: target, size: len(set)})
+		state.contents[target] = pointees{{region: graph.unkR}: false}
+		state.own(target)
+	}
+	if state.epoch != previous.epoch {
+		state.epoch = stamp
+	}
+	if state.reachEpoch != previous.reachEpoch {
+		state.reachEpoch = stamp
+	}
+	for step, epoch := range state.stepEpochs {
+		if old, ok := previous.stepEpochs[step]; !ok || old != epoch {
+			state.stepEpochs[step] = stamp
+		}
+	}
+	for target, snapshot := range state.backing {
+		if previous.backing[target] != snapshot {
+			delete(state.backing, target)
+			if _, ok := state.clobbered[target]; !ok {
+				state.clobbered[target] = stamp
+			}
+		}
+	}
+	for target, epoch := range state.clobbered {
+		if old, ok := previous.clobbered[target]; !ok || old != epoch {
+			state.clobbered[target] = stamp
+		}
+	}
+	if !maps.Equal(state.deferred, previous.deferred) && !state.deferred.unknown() {
+		state.deferred = pointees{{region: graph.unkR}: false}
+	}
+}
+
+// widenPhi coarsens a loop-header phi whose pointees grew since the previous
+// round. SSA values are graph-wide, not part of the block states, so a value
+// carried around a loop would otherwise keep growing however the states are
+// widened.
+func (graph *regionGraph) widenPhi(phi *ssa.Phi) {
+	if graph.widening == nil {
+		return
+	}
+	old, ok := graph.widening.phis[phi]
+	set := graph.values[phi]
+	if !ok || maps.Equal(old, set) || set.unknown() {
+		return
+	}
+	graph.widened = append(graph.widened, widening{target: slot{region: graph.opaque(phi)}, at: phi, size: len(set)})
+	graph.values[phi] = pointees{{region: graph.unkR}: false}
+}

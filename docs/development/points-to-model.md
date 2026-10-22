@@ -59,6 +59,20 @@ honest: an entry carried around a back edge whose object was created inside
 the loop is marked *stale*, because the pointer then denotes an earlier
 iteration's object. A stale entry supports may-answers only.
 
+The fixpoint runs six plain rounds, and a body that settles in them keeps
+exactly the least fixpoint they compute. Some loops grow by one step a
+round instead: a walk over a linked structure reads one more unwritten
+level, `content(content(…))`, each time round; effects with different
+stamps read the same slot as a new object each round; a descent through
+nested maps nests element slots beneath the unknown object. Such a body is
+widened for up to six more rounds: every part of a loop header's entry, and
+every header phi, that still changed since the previous round becomes
+`unknown` or takes the header's stamp, as a join already stamps
+disagreeing effects, and an update of the unknown map is the opaque write
+a store through the unknown pointer makes. Widening only coarsens, so its
+answers stay sound: may-answers say yes, must-answers say no. The dump
+lists every slot and phi it widened.
+
 A dynamically indexed struct copy preserves bounded reference fields when its
 array or slice window is known and has at most 16 elements. Each copied field
 contains the union of destinations from every possible element; an unwritten,
@@ -136,8 +150,8 @@ reason, `disjoint-paths`, `disjoint-objects`, or `unescaped-local`, and
 `gohawk dump heap` prints every value's pointees so an answer can be
 checked against the graph that gave it.
 
-Exhaustion of the build budget, or a fixpoint that does not settle, makes
-the whole graph unavailable and every answer unknown. A slot recorded as
+Exhaustion of the build budget, or a fixpoint that does not settle even
+after widening, makes the whole graph unavailable and every answer unknown. A slot recorded as
 holding more than a bounded number of objects, which a buffer appended to
 at every site of a large function does, is widened to `unknown` instead:
 may-answers about it say yes, must-answers say no, and the graph stays

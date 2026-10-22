@@ -223,6 +223,9 @@ type regionGraph struct {
 	// escapeOrigins records the first instruction that escaped each object
 	// in each way, for the dump.
 	escapeOrigins map[escapeOrigin]ssa.Instruction
+	// widening holds the previous round's loop-header entries and phi values
+	// while the fixpoint widens, and is nil otherwise.
+	widening *loopSnapshot
 	// widened records every slot whose pointees were collapsed to unknown
 	// because they outgrew the bound, for the dump.
 	widened []widening
@@ -289,9 +292,16 @@ type sliceView struct {
 // than half-modeled.
 const regionBuildBudget = 200_000
 
-// regionFixpointRounds bounds the rounds over the blocks. Ordinary loops
-// settle in two or three; a body that has not settled by then is unavailable.
+// regionFixpointRounds bounds the plain rounds over the blocks. Ordinary
+// loops settle in two or three. A body that has not settled by then is
+// widened; one that has settled is never widened, so its graph is exactly
+// the least fixpoint the plain rounds compute.
 const regionFixpointRounds = 6
+
+// regionWideningRounds bounds the rounds after widening starts. Widening
+// only coarsens a loop header's entry, so a body settles within a few more
+// rounds or is unavailable.
+const regionWideningRounds = 6
 
 func valueFunction(value ssa.Value) *ssa.Function {
 	switch typed := value.(type) {
@@ -394,17 +404,35 @@ func (graph *regionGraph) fixpoint() (GraphBuildReason, string) {
 	}
 	graph.entry[function.Blocks[0]] = newRegionState()
 	out := map[*ssa.BasicBlock]*regionState{}
+	headers := loopHeaders(function)
 	// unsettled explains a body that never settles: the blocks that still
 	// changed in the last round. Earlier rounds change on every ordinary
 	// loop, and describing those differences cost more than the transfers.
 	var unsettled []string
-	for round := range regionFixpointRounds {
-		last := round == regionFixpointRounds-1
+	var previous *loopSnapshot
+	rounds := regionFixpointRounds + regionWideningRounds
+	for round := range rounds {
+		last := round == rounds-1
+		graph.widening = previous
+		// Snapshots start one round before widening, so the first widened
+		// round can tell what the last plain round still changed.
+		var current *loopSnapshot
+		if round >= regionFixpointRounds-1 {
+			current = newLoopSnapshot()
+		}
 		changed := false
 		for _, block := range graph.order {
 			in := graph.entryState(block, out)
 			if in == nil {
 				continue
+			}
+			if headers[block] {
+				if previous != nil {
+					graph.widen(in, previous.entries[block], block)
+				}
+				if current != nil {
+					current.recordEntry(block, in)
+				}
 			}
 			state := in.clone()
 			for _, instruction := range block.Instrs {
@@ -423,10 +451,16 @@ func (graph *regionGraph) fixpoint() (GraphBuildReason, string) {
 		}
 		if !changed {
 			graph.exit = out
+			graph.widening = nil
 			return GraphBuildComplete, ""
 		}
+		if current != nil {
+			current.recordPhis(graph, headers)
+		}
+		previous = current
 	}
-	return GraphBuildFixpointLimit, "in " + strconv.Itoa(regionFixpointRounds) + " rounds; changes: " + strings.Join(unsettled, " | ")
+	graph.widening = nil
+	return GraphBuildFixpointLimit, "in " + strconv.Itoa(rounds) + " rounds; changes: " + strings.Join(unsettled, " | ")
 }
 
 // entryState merges the predecessors' out states into the block's entry

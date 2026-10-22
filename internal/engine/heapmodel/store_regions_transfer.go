@@ -275,6 +275,7 @@ func (graph *regionGraph) phi(merged *ssa.Phi) {
 		}
 	}
 	graph.setValue(merged, result)
+	graph.widenPhi(merged)
 }
 
 func (graph *regionGraph) extract(extract *ssa.Extract) {

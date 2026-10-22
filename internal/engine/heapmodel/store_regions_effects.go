@@ -391,7 +391,17 @@ func (graph *regionGraph) mapUpdate(state *regionState, update *ssa.MapUpdate) {
 	key := graph.pointees(update.Key)
 	graph.escape(state, value, HeapEscapedField, update)
 	graph.escape(state, key, HeapEscapedField, update)
-	for target := range graph.pointees(update.Map) {
+	targets := graph.pointees(update.Map)
+	if graph.widening != nil && targets.unknown() {
+		// While widening, an update of the unknown map is the opaque write
+		// storeValue makes through the unknown pointer. Its element slots
+		// would otherwise nest one level deeper on every round of a loop
+		// that descends nested maps, and never settle.
+		state.opaque = true
+		graph.invalidateForeign(state, "", graph.id(update), reachAny)
+		return
+	}
+	for target := range targets {
 		graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, "elem")}, value)
 		graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, "key")}, key)
 	}
@@ -400,6 +410,12 @@ func (graph *regionGraph) mapUpdate(state *regionState, update *ssa.MapUpdate) {
 func (graph *regionGraph) lookup(state *regionState, lookup *ssa.Lookup) {
 	result := pointees{{region: graph.opaque(lookup)}: false}
 	if _, ok := lookup.X.Type().Underlying().(*types.Map); ok {
+		if graph.widening != nil && graph.pointees(lookup.X).unknown() {
+			// The read matching mapUpdate's opaque write while widening.
+			result.add(slot{region: graph.unkR}, false)
+			graph.setValue(lookup, result)
+			return
+		}
 		for target := range graph.pointees(lookup.X) {
 			if set, ok := state.contents[slot{region: target.region, path: joinSlotPath(target.path, "elem")}]; ok {
 				result.union(set)
