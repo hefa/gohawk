@@ -364,7 +364,7 @@ func (projection *heapProjection) edges(states []*regionState, returns []*ssa.Re
 			}
 		}
 	}
-	slices.SortFunc(edges, compareEdges)
+	slices.SortFunc(edges, publishedEdgeOrder)
 	return edges
 }
 

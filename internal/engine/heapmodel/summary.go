@@ -72,6 +72,27 @@ func compareEdges(left, right HeapEdge) int {
 	return strings.Compare(left.To.Origin, right.To.Origin)
 }
 
+// publishedEdgeOrder refines compareEdges into a total order. Edges are
+// gathered from maps, so edges that tie under compareEdges, differing only in
+// Object or Must, would otherwise be published in a different order on every
+// run, and the fact bytes with them. The refinement keeps the list sorted
+// under compareEdges.
+func publishedEdgeOrder(left, right HeapEdge) int {
+	if order := compareEdges(left, right); order != 0 {
+		return order
+	}
+	if left.To.Object != right.To.Object {
+		return cmp.Compare(left.To.Object, right.To.Object)
+	}
+	switch {
+	case left.Must == right.Must:
+		return 0
+	case left.Must:
+		return 1
+	}
+	return -1
+}
+
 // Every is proof metadata, not part of the published effect ordering.
 func compareEffects(left, right HeapEffect) int {
 	if left.Slot != right.Slot {
