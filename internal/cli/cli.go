@@ -91,8 +91,9 @@ func Main() int {
 	return 0
 }
 
-// prepareUnit adjusts the analyzers for the go vet unit named by arguments:
-// profiling, when requested, wraps them.
+// prepareUnit adjusts the analyzers for the go vet unit named by arguments.
+// A facts-only unit skips analyzers whose only output is diagnostics, which
+// go vet would discard. Profiling, when requested, wraps what remains.
 func prepareUnit(arguments []string, analyzers []*analysis.Analyzer, runtime cliRuntime) error {
 	path := vetunit.ConfigPath(arguments)
 	if path == "" {
@@ -101,6 +102,9 @@ func prepareUnit(arguments []string, analyzers []*analysis.Analyzer, runtime cli
 	unit, err := vetunit.ReadConfig(path)
 	if err != nil {
 		return err
+	}
+	if unit.VetxOnly {
+		vetunit.SkipDiagnosticsOnly(analyzers)
 	}
 	return vetprofile.Instrument(runtime.getenv(vetprofile.DirectoryVariable), unit, analyzers)
 }
