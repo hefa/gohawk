@@ -300,8 +300,10 @@ const regionFixpointRounds = 6
 
 // regionWideningRounds bounds the rounds after widening starts. Widening
 // only coarsens a loop header's entry, so a body settles within a few more
-// rounds or is unavailable.
-const regionWideningRounds = 6
+// rounds or is unavailable. Escapes are left to grow: they accumulate over
+// finitely many slots, but can take a step a round to cross nested maps, as
+// caddy's httpcaddyfile mapAddressToProtocolToServerBlocks needs eight.
+const regionWideningRounds = 8
 
 func valueFunction(value ssa.Value) *ssa.Function {
 	switch typed := value.(type) {

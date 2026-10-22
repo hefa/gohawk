@@ -65,7 +65,7 @@ round instead: a walk over a linked structure reads one more unwritten
 level, `content(content(…))`, each time round; effects with different
 stamps read the same slot as a new object each round; a descent through
 nested maps nests element slots beneath the unknown object. Such a body is
-widened for up to six more rounds: every part of a loop header's entry, and
+widened for up to eight more rounds: every part of a loop header's entry, and
 every header phi, that still changed since the previous round becomes
 `unknown` or takes the header's stamp, as a join already stamps
 disagreeing effects, and an update of the unknown map is the opaque write

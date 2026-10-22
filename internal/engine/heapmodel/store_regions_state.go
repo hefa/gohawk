@@ -1,6 +1,7 @@
 package heapmodel
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -323,7 +324,7 @@ func (state *regionState) difference(other *regionState) string {
 	case !maps.Equal(state.clobbered, other.clobbered):
 		return "clobbers"
 	case !maps.Equal(state.escapes, other.escapes):
-		return "escapes"
+		return "escapes: " + escapeDifference(state.escapes, other.escapes)
 	case !maps.Equal(state.ran, other.ran):
 		return "callbacks run"
 	case !maps.Equal(state.backing, other.backing):
@@ -332,6 +333,29 @@ func (state *regionState) difference(other *regionState) string {
 		return "opacity"
 	}
 	return "deferred calls"
+}
+
+// escapeDifference names the first slot whose escapes differ, in slot
+// order, and how many others do.
+func escapeDifference(mine, other map[slot]HeapEscape) string {
+	changed := map[slot]bool{}
+	for target, kinds := range other {
+		if mine[target] != kinds {
+			changed[target] = true
+		}
+	}
+	for target, kinds := range mine {
+		if other[target] != kinds {
+			changed[target] = true
+		}
+	}
+	ordered := orderedSlots(changed)
+	first := ordered[0]
+	text := fmt.Sprintf("%s %v, was %v", slotName(first), other[first], mine[first])
+	if len(ordered) > 1 {
+		text += fmt.Sprintf(" (and %d more)", len(ordered)-1)
+	}
+	return text
 }
 
 // renderPointees names a set's slots for the dump.
