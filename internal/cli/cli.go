@@ -11,6 +11,7 @@ import (
 
 	gohawk "github.com/kojah/gohawk/analyzers"
 	"github.com/kojah/gohawk/internal/cli/vetprofile"
+	"github.com/kojah/gohawk/internal/cli/vetunit"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/unitchecker"
 )
@@ -82,13 +83,26 @@ func Main() int {
 	// tests that stub the process boundary.
 	registerSelectionFlags()
 	os.Args = result.invocation.arguments
-	analyzers, err := vetprofile.Instrument(runtime.getenv(vetprofile.DirectoryVariable), os.Args, result.invocation.analyzers)
-	if err != nil {
+	if err := prepareUnit(os.Args, result.invocation.analyzers, runtime); err != nil {
 		writeLine(runtime.errorsOutput, "gohawk:", err)
 		return 1
 	}
-	unitchecker.Main(analyzers...)
+	unitchecker.Main(result.invocation.analyzers...)
 	return 0
+}
+
+// prepareUnit adjusts the analyzers for the go vet unit named by arguments:
+// profiling, when requested, wraps them.
+func prepareUnit(arguments []string, analyzers []*analysis.Analyzer, runtime cliRuntime) error {
+	path := vetunit.ConfigPath(arguments)
+	if path == "" {
+		return nil
+	}
+	unit, err := vetunit.ReadConfig(path)
+	if err != nil {
+		return err
+	}
+	return vetprofile.Instrument(runtime.getenv(vetprofile.DirectoryVariable), unit, analyzers)
 }
 
 func runCLI(arguments []string, runtime cliRuntime) cliResult {

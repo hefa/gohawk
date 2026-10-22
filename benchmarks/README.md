@@ -69,8 +69,15 @@ script writes, under `profiles/`:
 - `NAME-cpu-analyzers.txt`, CPU time by the `analyzer` sample label.
   Unlabelled samples are setup.
 
-Profiling adds sampling overhead, so the profiled run is not one of the
-measured runs. The same variable works outside the script, but only for units
+Each unit's record also lists the size, count and a content fingerprint of
+every fact file it imported. Comparing the fingerprints of two profiled runs
+checks that an optimization left every dependency's facts unchanged, which is
+a much stronger check than the few diagnostics a repository reports. The
+fingerprint covers fact content, not file bytes: gob numbers types in
+registration order, which varies between runs.
+
+Profiling adds sampling overhead, and fingerprinting decodes every imported
+fact, so the profiled run is not one of the measured runs. The same variable works outside the script, but only for units
 `go vet` actually runs: use a freshly built binary, or a cleared cache.
 
 Use `--manifest` to supply another tab-separated repository list. Each data

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/gob"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,11 +27,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/pprof"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/kojah/gohawk/internal/cli/vetunit"
 	"golang.org/x/tools/go/analysis"
 )
 
@@ -49,6 +52,19 @@ type Record struct {
 	// from process start until the first analyzer runs.
 	SetupSeconds    float64 `json:"setup_seconds"`
 	AnalysisSeconds float64 `json:"analysis_seconds"`
+	// ImportedFactBytes is the total size of the imported packages' fact
+	// files, which unitchecker decodes before the first analyzer runs.
+	ImportedFactBytes int64 `json:"imported_fact_bytes"`
+	// ImportedFactCount is the number of facts in those files.
+	ImportedFactCount int `json:"imported_fact_count"`
+	// ImportedFacts maps each import path to a fingerprint of its facts.
+	// Across a run's records it covers every package's exported facts except
+	// those no other unit imports, so an optimization can be checked for
+	// unchanged facts as well as unchanged diagnostics.
+	ImportedFacts map[string]string `json:"imported_facts"`
+	// ImportedFactTypes splits each fingerprint by fact type, naming which
+	// family changed when a fingerprint differs.
+	ImportedFactTypes map[string]map[string]string `json:"imported_fact_types"`
 	// PeakRSSKiB is the process high-water mark when analysis finished, or
 	// nil when the platform does not report it.
 	PeakRSSKiB *int64 `json:"peak_rss_kib"`
@@ -58,16 +74,9 @@ type Record struct {
 	Analyzers map[string]float64 `json:"analyzers"`
 }
 
-// unitConfig is the part of unitchecker's .cfg file that names the unit.
-type unitConfig struct {
-	ID         string `json:"ID"`
-	ImportPath string `json:"ImportPath"`
-	VetxOnly   bool   `json:"VetxOnly"`
-}
-
 type session struct {
 	started  time.Time
-	unit     unitConfig
+	unit     vetunit.Config
 	name     string
 	dir      string
 	roots    []*analysis.Analyzer
@@ -78,24 +87,18 @@ type session struct {
 	analyzer map[string]float64
 }
 
-// Instrument prepares analyzers for profiling the unit named by the .cfg
-// file in arguments. It returns analyzers unchanged when directory is empty
-// or the invocation is not an analysis unit.
+// Instrument prepares analyzers for profiling unit. It does nothing when
+// directory is empty.
 //
 // Run is replaced on the shared analyzer values rather than on copies:
 // passes look up prerequisite results by the original analyzer pointers, so
 // a cloned graph would break every ResultOf lookup. This is safe only because
 // a vet-tool process analyzes exactly one unit.
-func Instrument(directory string, arguments []string, analyzers []*analysis.Analyzer) ([]*analysis.Analyzer, error) {
-	configPath := unitConfigPath(arguments)
-	if directory == "" || configPath == "" {
-		return analyzers, nil
+func Instrument(directory string, unit vetunit.Config, analyzers []*analysis.Analyzer) error {
+	if directory == "" {
+		return nil
 	}
 	started := time.Now()
-	unit, err := readUnitConfig(configPath)
-	if err != nil {
-		return nil, err
-	}
 	// go vet can analyze one unit ID twice, once for facts as a dependency and
 	// once in full as a root, so the process ID keeps their records apart.
 	digest := sha256.Sum256([]byte(unit.ID))
@@ -108,36 +111,99 @@ func Instrument(directory string, arguments []string, analyzers []*analysis.Anal
 		analyzer: make(map[string]float64),
 	}
 	if err := current.startProfile(); err != nil {
-		return nil, err
+		return err
 	}
 	wrapped := make(map[*analysis.Analyzer]bool)
 	for _, analyzer := range analyzers {
 		current.wrap(analyzer, wrapped)
 	}
-	return analyzers, nil
+	return nil
 }
 
-func unitConfigPath(arguments []string) string {
-	if len(arguments) == 0 {
-		return ""
+// importedFacts sizes, counts and fingerprints the unit's imported fact
+// files. unitchecker has already read every one of them before analysis
+// starts, and has registered every fact type with gob.
+func importedFacts(unit vetunit.Config) (int64, int, map[string]string, map[string]map[string]string, error) {
+	var total int64
+	var count int
+	digests := make(map[string]string, len(unit.PackageVetx))
+	byType := make(map[string]map[string]string, len(unit.PackageVetx))
+	for importPath, file := range unit.PackageVetx {
+		data, err := os.ReadFile(file) //nolint:gosec // go vet names the imported fact files.
+		if err != nil {
+			return 0, 0, nil, nil, fmt.Errorf("read imported facts of %s: %w", importPath, err)
+		}
+		digest, types, facts, err := factDigest(data)
+		if err != nil {
+			return 0, 0, nil, nil, fmt.Errorf("fingerprint imported facts of %s: %w", importPath, err)
+		}
+		total += int64(len(data))
+		count += facts
+		digests[importPath] = digest
+		byType[importPath] = types
 	}
-	last := arguments[len(arguments)-1]
-	if !strings.HasSuffix(last, ".cfg") {
-		return ""
-	}
-	return last
+	return total, count, digests, byType, nil
 }
 
-func readUnitConfig(path string) (unitConfig, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // go vet names the unit's config file.
-	if err != nil {
-		return unitConfig{}, fmt.Errorf("read vet unit config: %w", err)
+// wireFact mirrors the gob record x/tools writes for each fact; gob matches
+// it by field name.
+type wireFact struct {
+	PkgPath string
+	Object  string
+	Fact    analysis.Fact
+}
+
+// factDigest fingerprints a fact file's content rather than its bytes. Gob
+// numbers types in registration order, and unitchecker registers some fact
+// types in map order, so equal facts can produce different files. The
+// digest covers each fact's package, object, type and payload encoding,
+// sorted.
+func factDigest(data []byte) (string, map[string]string, int, error) {
+	if len(data) == 0 {
+		return "empty", nil, 0, nil
 	}
-	var unit unitConfig
-	if err := json.Unmarshal(data, &unit); err != nil {
-		return unitConfig{}, fmt.Errorf("decode vet unit config %s: %w", path, err)
+	var facts []wireFact
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&facts); err != nil {
+		return "", nil, 0, fmt.Errorf("decode fact file: %w", err)
 	}
-	return unit, nil
+	entries := make([]string, 0, len(facts))
+	entriesByType := map[string][]string{}
+	for _, fact := range facts {
+		payload, err := factPayload(fact.Fact)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		factType := fmt.Sprintf("%T", fact.Fact)
+		entry := fmt.Sprintf("%q %q %s %x", fact.PkgPath, fact.Object, factType, payload)
+		entries = append(entries, entry)
+		entriesByType[factType] = append(entriesByType[factType], entry)
+	}
+	byType := make(map[string]string, len(entriesByType))
+	for factType, list := range entriesByType {
+		byType[factType] = digestOf(list)
+	}
+	return digestOf(entries), byType, len(facts), nil
+}
+
+func digestOf(entries []string) string {
+	slices.Sort(entries)
+	digest := sha256.Sum256([]byte(strings.Join(entries, "\n")))
+	return hex.EncodeToString(digest[:])
+}
+
+func factPayload(fact analysis.Fact) ([]byte, error) {
+	if encoder, ok := fact.(gob.GobEncoder); ok {
+		payload, err := encoder.GobEncode()
+		if err != nil {
+			return nil, fmt.Errorf("encode %T: %w", fact, err)
+		}
+		return payload, nil
+	}
+	var buffer bytes.Buffer
+	if err := gob.NewEncoder(&buffer).Encode(fact); err != nil {
+		return nil, fmt.Errorf("encode %T: %w", fact, err)
+	}
+	return buffer.Bytes(), nil
 }
 
 func (s *session) startProfile() error {
@@ -255,16 +321,24 @@ func (s *session) write() error {
 	finished := time.Now()
 	pprof.StopCPUProfile()
 	closeErr := s.profile.Close()
+	factBytes, factCount, factDigests, factTypes, factErr := importedFacts(s.unit)
+	if factErr != nil {
+		return errors.Join(closeErr, factErr)
+	}
 	s.mu.Lock()
 	first := s.first
 	record := Record{
-		Package:         s.unit.ImportPath,
-		ID:              s.unit.ID,
-		FactsOnly:       s.unit.VetxOnly,
-		SetupSeconds:    first.Sub(s.started).Seconds(),
-		AnalysisSeconds: finished.Sub(first).Seconds(),
-		PeakRSSKiB:      peakRSSKiB(),
-		Analyzers:       s.analyzer,
+		Package:           s.unit.ImportPath,
+		ID:                s.unit.ID,
+		FactsOnly:         s.unit.VetxOnly,
+		SetupSeconds:      first.Sub(s.started).Seconds(),
+		AnalysisSeconds:   finished.Sub(first).Seconds(),
+		ImportedFactBytes: factBytes,
+		ImportedFactCount: factCount,
+		ImportedFacts:     factDigests,
+		ImportedFactTypes: factTypes,
+		PeakRSSKiB:        peakRSSKiB(),
+		Analyzers:         s.analyzer,
 	}
 	data, err := json.Marshal(record)
 	s.mu.Unlock()
