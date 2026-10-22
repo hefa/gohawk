@@ -10,6 +10,9 @@ import (
 	"strings"
 
 	gohawk "github.com/kojah/gohawk/analyzers"
+	"github.com/kojah/gohawk/internal/analysis/passes/concurrencyfacts"
+	"github.com/kojah/gohawk/internal/analysis/passes/lifecyclefacts"
+	"github.com/kojah/gohawk/internal/analysis/passes/resultfacts"
 	"github.com/kojah/gohawk/internal/cli/vetprofile"
 	"github.com/kojah/gohawk/internal/cli/vetunit"
 	"golang.org/x/tools/go/analysis"
@@ -92,8 +95,9 @@ func Main() int {
 }
 
 // prepareUnit adjusts the analyzers for the go vet unit named by arguments.
-// A facts-only unit skips analyzers whose only output is diagnostics, which
-// go vet would discard. Profiling, when requested, wraps what remains.
+// The fact passes that run are ordered one after another. A facts-only unit
+// skips analyzers whose only output is diagnostics, which go vet would
+// discard. Profiling, when requested, wraps what remains.
 func prepareUnit(arguments []string, analyzers []*analysis.Analyzer, runtime cliRuntime) error {
 	path := vetunit.ConfigPath(arguments)
 	if path == "" {
@@ -103,6 +107,11 @@ func prepareUnit(arguments []string, analyzers []*analysis.Analyzer, runtime cli
 	if err != nil {
 		return err
 	}
+	// The fact passes share the heap model's process-wide registry and graph
+	// cache; running them concurrently made the facts they publish depend on
+	// scheduling. Lifecycle inference registers the summaries the others read.
+	factPasses := []*analysis.Analyzer{lifecyclefacts.Analyzer, resultfacts.Analyzer, concurrencyfacts.Analyzer}
+	vetunit.Sequence(arguments, analyzers, factPasses)
 	if unit.VetxOnly {
 		vetunit.SkipDiagnosticsOnly(analyzers)
 	}
