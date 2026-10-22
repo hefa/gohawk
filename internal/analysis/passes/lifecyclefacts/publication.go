@@ -33,18 +33,27 @@ type publishedPackage struct {
 func publish(fact Fact) *publishedFact { return &publishedFact{factcodec.Wrap(fact)} }
 
 func (fact *publishedFact) DescribeFact(object types.Object) []string {
-	value := fact.Value()
+	value, err := fact.Value()
+	if err != nil {
+		return []string{"undecodable fact: " + err.Error()}
+	}
 	return value.DescribeFact(object)
 }
 
 // DescribeHeap renders the published summary's heap projection for the dump.
 func (fact *publishedFact) DescribeHeap(object types.Object) []string {
-	value := fact.Value()
+	value, err := fact.Value()
+	if err != nil {
+		return []string{"undecodable fact: " + err.Error()}
+	}
 	return value.DescribeHeap(object)
 }
 
 func (fact *publishedCleanup) DescribeFact(object types.Object) []string {
-	value := fact.Value()
+	value, err := fact.Value()
+	if err != nil {
+		return []string{"undecodable fact: " + err.Error()}
+	}
 	return value.DescribeFact(object)
 }
 
@@ -73,7 +82,10 @@ func factForFunction(pass *analysis.Pass, function *ssa.Function) (Fact, bool) {
 	}
 	var published publishedFact
 	if pass.ImportObjectFact(object, &published) {
-		fact := published.Value()
+		fact, err := published.Value()
+		if err != nil {
+			return Fact{}, false
+		}
 		// An older heap fact may describe a returned field address as the
 		// field's contents. None of its derived claims are safe to import
 		// under the newer edge semantics.
@@ -93,7 +105,8 @@ func factForFunction(pass *analysis.Pass, function *ssa.Function) (Fact, bool) {
 	if signature, ok := object.Type().(*types.Signature); !ok || signature.Params().Len()+receiverCount(signature) > 64 {
 		return Fact{}, false
 	}
-	if slices.Contains(marker.Value().Bodiless, object.Name()) {
+	summarized, err := marker.Value()
+	if err != nil || slices.Contains(summarized.Bodiless, object.Name()) {
 		return Fact{}, false
 	}
 	return Fact{}, true

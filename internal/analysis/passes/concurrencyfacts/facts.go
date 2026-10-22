@@ -78,12 +78,13 @@ func run(pass *analysis.Pass) (any, error) {
 	}
 	engine := NewEngine()
 	engine.fields.use(heapmodel.NewWriteOnceFields(pass.Pkg, ssaflow.PackageFunctions(pass)))
-	engine.facts = make(map[*types.Func]Fact)
+	// Imported facts decode on first lookup; most are never consulted.
+	engine.facts = make(map[*types.Func]*publishedFact)
 	for _, imported := range pass.AllObjectFacts() {
 		object, ok := imported.Object.(*types.Func)
 		published, valid := imported.Fact.(*publishedFact)
-		if ok && valid && published.Value().Version == factVersion {
-			engine.facts[object] = published.Value()
+		if ok && valid {
+			engine.facts[object] = published
 		}
 	}
 	for _, function := range functions {
@@ -230,8 +231,13 @@ func (engine *Engine) importedCall(call ssa.CallInstruction, function *ssa.Funct
 	if !ok {
 		return unknown
 	}
-	fact, ok := engine.facts[object]
+	published, ok := engine.facts[object]
 	if !ok {
+		return unknown
+	}
+	// A fact that does not decode, or from another version, is unknown.
+	fact, err := published.Value()
+	if err != nil || fact.Version != factVersion {
 		return unknown
 	}
 	return engine.bindDeclaration(call, fact)

@@ -13,7 +13,11 @@ import (
 
 // DescribeFact renders the published fact for gohawk dump facts.
 func (fact *publishedFact) DescribeFact(types.Object) []string {
-	return fact.Value().describe()
+	value, err := fact.Value()
+	if err != nil {
+		return []string{"undecodable fact: " + err.Error()}
+	}
+	return value.describe()
 }
 
 func (fact Fact) describe() []string {

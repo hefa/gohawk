@@ -24,7 +24,7 @@ type Engine struct {
 	paths     bool
 	budget    *proofs.SearchBudget
 	storage   *heapmodel.Storage
-	facts     map[*types.Func]Fact
+	facts     map[*types.Func]*publishedFact
 	// fields is shared by every query of the engine; see identity.go.
 	fields *fieldInventory
 }

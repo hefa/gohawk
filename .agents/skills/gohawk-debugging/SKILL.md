@@ -19,6 +19,7 @@ your head is slow and error-prone. Dump the real thing instead.
 | What does the analyzer see? | `gohawk dump ssa [-func NAME] ./pkg` |
 | How did the heap model get there? | `gohawk dump heap [-func NAME] [-ssa] [-bare] ./pkg` (each function's points-to graph with `applied`, `unsummarized`, `widened`, and `escaped` lines, and its exported summary; `-bare` without the lifecycle pass, so dependency summaries are missing) |
 | What did lifecyclefacts, resultfacts, or concurrencyfacts conclude about exported functions? | `gohawk dump facts [-func NAME] [-kind lifecycle,heap,result,concurrency] ./pkg` (one header per family; summary cases and result cases end in their condition; concurrency facts list effects or path alternatives; heap projections as `heap …` lines) |
+| Do two builds or runs publish byte-identical facts? | `gohawk dump facts -encoded ./pkg` per build, then diff; for whole runs compare the `imported_fact_types` fingerprints of two `GOHAWK_PROFILE_DIR` runs (see `benchmarks/README.md`) |
 | What did the analyzer decide, and why? | `gohawk dump trace [-func NAME] [-analyzer NAMES] [-decisions] ./pkg` (each proof grouped by function and candidate), or `gohawk -gohawk-trace=ANALYZER[,CHECK] ./pkg` for raw JSONL |
 | Did a search give up, and where did the time go? | `gohawk dump budget [-analyzer NAMES] [-deps] ./pkg` (slowest runs, and every exhausted search budget by analyzer run and asking site) |
 | Which locks does lockorder think are ordered? | `gohawk dump locks [-dot] ./pkg` (order edges with witnesses, and the cycles it reported) |

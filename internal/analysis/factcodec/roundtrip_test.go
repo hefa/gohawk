@@ -196,11 +196,15 @@ func TestEnvelopeRoundTrip(t *testing.T) {
 	if err := gob.NewDecoder(&data).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got.Value(), want) {
-		t.Fatalf("got %#v, want %#v", got.Value(), want)
+	value, err := got.Value()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(value, want) {
+		t.Fatalf("got %#v, want %#v", value, want)
 	}
 	want.Heap.Edges[0].To.Origin = "mutated"
-	if got.Value().Heap.Edges[0].To.Origin == "mutated" {
+	if value.Heap.Edges[0].To.Origin == "mutated" {
 		t.Fatal("decoded fact aliases input")
 	}
 }

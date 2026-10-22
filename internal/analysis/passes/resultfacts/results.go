@@ -82,7 +82,7 @@ func (summary Summary) Result(index int) Guarantee {
 type Engine struct {
 	mu        sync.Mutex
 	summaries *ssacall.FunctionSummaries[Summary]
-	imported  map[*types.Func]Fact
+	imported  map[*types.Func]*publishedFact
 }
 
 // NewEngine creates local-only result inference with no library-name guesses.
@@ -107,7 +107,7 @@ func (engine *Engine) function(function *ssa.Function, budget *proofs.SearchBudg
 	}
 	if len(function.Blocks) == 0 {
 		object, _ := function.Object().(*types.Func)
-		if fact, ok := engine.imported[object]; ok && fact.Version == factVersion {
+		if fact, ok := engine.importedFact(object); ok {
 			return Summary{Available: true, results: fact.Results, cases: fact.Cases, returned: fact.Returned, neverReturns: fact.NeverReturns}
 		}
 		return Summary{Reason: ReasonBodyUnavailable}

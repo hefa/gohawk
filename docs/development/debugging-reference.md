@@ -24,7 +24,7 @@ first thing to run when a classifier label is surprising.
 ## Fact dump
 
 ```text
-gohawk dump facts [-func NAME] [-kind KINDS] package...
+gohawk dump facts [-func NAME] [-kind KINDS] [-encoded] package...
 ```
 
 Prints the facts the given packages export, and those of the callees they
@@ -44,6 +44,11 @@ resolve, one family per header:
 `heap` (the lifecycle summaries' heap projection alone), `result`, and
 `concurrency`; the default prints them all. `gohawk dump facts -func Open -kind
 result,heap ./pkg` shows one function's result cases and heap projection.
+
+`-encoded` adds each published fact's wire payload in CBOR diagnostic
+notation. It shows fields the sentences omit and the exact order a fact was
+published in, so diffing two dumps answers whether two builds or two runs
+publish the same facts byte for byte.
 
 Positions count the receiver first, as the facts do. Only summarized
 functions appear: a function that is missing has no fact and is `unknown`

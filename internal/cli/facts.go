@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/gob"
 	"flag"
 	"fmt"
 	"go/token"
@@ -12,6 +13,7 @@ import (
 	"strings"
 
 	gohawk "github.com/kojah/gohawk/analyzers"
+	"github.com/kojah/gohawk/internal/analysis/factcodec"
 	"github.com/kojah/gohawk/internal/analysis/passes/concurrencyfacts"
 	"github.com/kojah/gohawk/internal/analysis/passes/lifecyclefacts"
 	"github.com/kojah/gohawk/internal/analysis/passes/resultfacts"
@@ -96,8 +98,9 @@ func printFacts(arguments []string, output, errorsOutput io.Writer) error {
 	flags.SetOutput(errorsOutput)
 	nameFilter := flags.String("func", "", "print only facts attached to the function with this name")
 	kindList := flags.String("kind", "", "comma-separated fact kinds to print: "+strings.Join(factKindLabels[1:], ", ")+" (default all)")
+	encoded := flags.Bool("encoded", false, "also print each published fact's wire payload in CBOR diagnostic notation")
 	flags.Usage = func() {
-		writeLine(errorsOutput, "usage: gohawk dump facts [-func NAME] [-kind KINDS] package...")
+		writeLine(errorsOutput, "usage: gohawk dump facts [-func NAME] [-kind KINDS] [-encoded] package...")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(arguments); err != nil {
@@ -124,7 +127,7 @@ func printFacts(arguments []string, output, errorsOutput io.Writer) error {
 		if action.Err != nil {
 			return action.Err
 		}
-		writeObjectFacts(&buffer, action, *nameFilter, referenced[action.Package.Types], kinds)
+		writeObjectFacts(&buffer, action, *nameFilter, referenced[action.Package.Types], factSelection{kinds: kinds, encoded: *encoded})
 	}
 	if buffer.Len() == 0 {
 		return fmt.Errorf("no fact matched %q", *nameFilter)
@@ -152,7 +155,15 @@ func factAnalyzers(kinds map[factKind]bool) []*analysis.Analyzer {
 	return analyzers
 }
 
-func writeObjectFacts(buffer *bytes.Buffer, action *checker.Action, filter string, referenced map[types.Object]bool, kinds map[factKind]bool) {
+// factSelection is what the dump prints for each fact: the selected kinds,
+// and whether to add the wire payload, which shows fields the renderings
+// omit and the exact order a fact was published in.
+type factSelection struct {
+	kinds   map[factKind]bool
+	encoded bool
+}
+
+func writeObjectFacts(buffer *bytes.Buffer, action *checker.Action, filter string, referenced map[types.Object]bool, selection factSelection) {
 	facts := action.AllObjectFacts()
 	// Positions are compared by file and offset, not by token.Pos: the
 	// fileset's bases depend on the order files were parsed in, which is
@@ -178,7 +189,7 @@ func writeObjectFacts(buffer *bytes.Buffer, action *checker.Action, filter strin
 			origin = "imported"
 		}
 		listed[fact.Object] = true
-		writeFact(buffer, action, fact.Object, origin, fact.Fact, kinds)
+		writeFact(buffer, action, fact.Object, origin, fact.Fact, selection)
 	}
 	// The lifecycle pass exports no fact for a function proven to do nothing
 	// with its parameters; its in-memory summaries still list every function
@@ -194,13 +205,14 @@ func writeObjectFacts(buffer *bytes.Buffer, action *checker.Action, filter strin
 			continue
 		}
 		fact := summaries[function]
-		writeFact(buffer, action, object, "exported here", &fact, kinds)
+		writeFact(buffer, action, object, "exported here", &fact, selection)
 	}
 }
 
 // writeFact prints the selected kinds of one fact under a header naming the
 // publishing pass and the object; a fact with nothing selected prints nothing.
-func writeFact(buffer *bytes.Buffer, action *checker.Action, object types.Object, origin string, fact any, kinds map[factKind]bool) {
+func writeFact(buffer *bytes.Buffer, action *checker.Action, object types.Object, origin string, fact any, selection factSelection) {
+	kinds := selection.kinds
 	kind := actionKind(action.Analyzer)
 	var lines []string
 	if kinds[kind] || kind == kindUnset {
@@ -215,6 +227,9 @@ func writeFact(buffer *bytes.Buffer, action *checker.Action, object types.Object
 	if describer, ok := fact.(heapDescriber); ok && kinds[kindHeap] {
 		lines = append(lines, describer.DescribeHeap(object)...)
 	}
+	if encoder, ok := fact.(gob.GobEncoder); ok && selection.encoded && len(lines) > 0 {
+		lines = append(lines, "encoded "+encodedFact(encoder))
+	}
 	if len(lines) == 0 {
 		return
 	}
@@ -222,6 +237,18 @@ func writeFact(buffer *bytes.Buffer, action *checker.Action, object types.Object
 	for _, line := range lines {
 		fmt.Fprintf(buffer, "  %s\n", line)
 	}
+}
+
+func encodedFact(encoder gob.GobEncoder) string {
+	data, err := encoder.GobEncode()
+	if err != nil {
+		return "unavailable: " + err.Error()
+	}
+	notation, err := factcodec.Diagnose(data)
+	if err != nil {
+		return "undecodable: " + err.Error()
+	}
+	return notation
 }
 
 // referencedCallees collects the objects of the static callees the lifecycle

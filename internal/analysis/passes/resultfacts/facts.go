@@ -48,15 +48,13 @@ func run(pass *analysis.Pass) (any, error) {
 		return nil, err
 	}
 	engine := NewEngine()
-	engine.imported = make(map[*types.Func]Fact)
+	// Imported facts decode on first lookup; most are never consulted.
+	engine.imported = make(map[*types.Func]*publishedFact)
 	for _, imported := range pass.AllObjectFacts() {
 		object, ok := imported.Object.(*types.Func)
 		published, valid := imported.Fact.(*publishedFact)
 		if ok && valid {
-			fact := published.Value()
-			if validFact(&fact) {
-				engine.imported[object] = fact
-			}
+			engine.imported[object] = published
 		}
 	}
 	for _, function := range functions {
@@ -75,6 +73,20 @@ func run(pass *analysis.Pass) (any, error) {
 		}
 	}
 	return engine, nil
+}
+
+// importedFact decodes the fact published for object. A fact that does not
+// decode or validate is unavailable, never an empty guarantee.
+func (engine *Engine) importedFact(object *types.Func) (Fact, bool) {
+	published, ok := engine.imported[object]
+	if !ok {
+		return Fact{}, false
+	}
+	fact, err := published.Value()
+	if err != nil || !validFact(&fact) {
+		return Fact{}, false
+	}
+	return fact, true
 }
 
 func validFact(fact *Fact) bool {

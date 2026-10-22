@@ -59,6 +59,26 @@ func Decode(data []byte, fact any) error {
 	if decodeModeError != nil {
 		return decodeModeError
 	}
+	if err := checkFraming(data); err != nil {
+		return err
+	}
+	return decodeMode.Unmarshal(data[len(wireHeader):], fact)
+}
+
+var errNoPayload = errors.New("absent fact payload")
+
+// Diagnose renders an encoded fact in CBOR diagnostic notation, for dumps
+// that must show the exact published payload.
+func Diagnose(data []byte) (string, error) {
+	if err := checkFraming(data); err != nil {
+		return "", err
+	}
+	return cbor.Diagnose(data[len(wireHeader):])
+}
+
+// checkFraming applies the checks that need no payload decoding: size,
+// version header, and an absent payload.
+func checkFraming(data []byte) error {
 	if len(data) > maxPayloadBytes+len(wireHeader) {
 		return fmt.Errorf("fact payload exceeds %d bytes", maxPayloadBytes)
 	}
@@ -68,7 +88,7 @@ func Decode(data []byte, fact any) error {
 	if len(data) == len(wireHeader)+1 && (data[len(wireHeader)] == 0xf6 || data[len(wireHeader)] == 0xf7) {
 		// CBOR treats null and undefined as absent. Neither may manufacture
 		// a zero summary, especially a package marker claiming completeness.
-		return errors.New("absent fact payload")
+		return errNoPayload
 	}
-	return decodeMode.Unmarshal(data[len(wireHeader):], fact)
+	return nil
 }

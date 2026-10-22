@@ -29,8 +29,8 @@ func TestEnvelopeValues(t *testing.T) {
 		if err := decoded.GobDecode(data); err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(value, decoded.Value()) {
-			t.Fatalf("got %#v, want %#v", decoded.Value(), value)
+		if got := mustValue(t, &decoded); !reflect.DeepEqual(value, got) {
+			t.Fatalf("got %#v, want %#v", got, value)
 		}
 		fresh, err := Encode(&value)
 		if err != nil || !bytes.Equal(data, fresh) {
@@ -51,7 +51,7 @@ func TestEnvelopeReplacement(t *testing.T) {
 	if err := envelope.GobDecode(data); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(envelope.Value(), testPayload{}) {
+	if !reflect.DeepEqual(mustValue(t, &envelope), testPayload{}) {
 		t.Fatal("decode retained old fields")
 	}
 	encoded, err := envelope.GobEncode()
@@ -79,20 +79,55 @@ func TestEnvelopeRejectsInvalidData(t *testing.T) {
 		"oversized":     make([]byte, maxPayloadBytes+len(wireHeader)+1),
 	} {
 		t.Run(name, func(t *testing.T) {
+			// Framing errors fail the decode and keep the old evidence; payload
+			// errors surface on first use, so the fact is never usable.
 			envelope := Wrap(testPayload{Mask: 42})
-			if err := envelope.GobDecode(data); err == nil {
-				t.Fatal("accepted invalid fact")
+			if err := envelope.GobDecode(data); err != nil {
+				if mustValue(t, &envelope).Mask != 42 {
+					t.Fatal("failed decode changed evidence")
+				}
+				return
 			}
-			if envelope.Value().Mask != 42 {
-				t.Fatal("failed decode changed evidence")
+			if _, err := envelope.Value(); err == nil {
+				t.Fatal("accepted invalid fact")
 			}
 		})
 	}
 }
 
+// TestEnvelopeReexportsImportedBytes pins that an imported fact is passed on
+// exactly as it arrived, whether or not it was decoded in between.
+func TestEnvelopeReexportsImportedBytes(t *testing.T) {
+	data, err := Encode(&testPayload{Items: []int{3, 1}, Names: map[string]int{"b": 2, "a": 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, decodeFirst := range []bool{false, true} {
+		var envelope Envelope[testPayload]
+		if err := envelope.GobDecode(data); err != nil {
+			t.Fatal(err)
+		}
+		if decodeFirst {
+			mustValue(t, &envelope)
+		}
+		if encoded, err := envelope.GobEncode(); err != nil || !bytes.Equal(encoded, data) {
+			t.Fatalf("re-exported %x, %v; want %x", encoded, err, data)
+		}
+	}
+}
+
+func mustValue(t *testing.T, envelope *Envelope[testPayload]) testPayload {
+	t.Helper()
+	value, err := envelope.Value()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
 func TestEnvelopeConcurrentCopies(t *testing.T) {
 	envelope := Wrap(testPayload{Names: map[string]int{"z": 3, "a": 7}})
-	want, err := Encode(envelope.Value())
+	want, err := Encode(mustValue(t, &envelope))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +166,11 @@ func FuzzEnvelopeDecode(f *testing.F) {
 		if err := again.GobDecode(encoded); err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(envelope.Value(), again.Value()) {
+		value, err := envelope.Value()
+		if err != nil {
+			return
+		}
+		if !reflect.DeepEqual(value, mustValue(t, &again)) {
 			t.Fatal("unstable decode")
 		}
 	})

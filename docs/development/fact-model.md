@@ -20,6 +20,14 @@ Published values and their reachable slices, maps, and pointers are immutable;
 copied envelopes share a concurrency-safe encoding cache. Decoding constructs
 an independent value and replaces the receiver only on success.
 
+Imported envelopes decode lazily. A package imports the facts of every
+dependency whose objects its API can reach, transitively for methods, fields
+and types, but consults few of them; decoding every one dominated whole-run
+cost. `GobDecode` checks only the framing (size, header, absent payload) and
+keeps the bytes; the first `Value` call decodes and validates them, and an
+imported fact that fails is unavailable to its caller, never an empty
+summary. Re-exporting an imported fact passes on the bytes it arrived as.
+
 The private payload starts with a format/version header. Unsupported versions,
 oversized payloads (over 16 MiB), excessive nesting or collections, duplicate
 keys, trailing data, and unknown fields are rejected. Existing domain version

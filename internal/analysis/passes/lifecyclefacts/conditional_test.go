@@ -133,8 +133,8 @@ func TestConditionalCoverageCutCannotPublish(t *testing.T) {
 		t.Fatalf("interrupted large body retained cases: %+v", large)
 	}
 	encoded := publish(Fact{Discharges: large})
-	if got := encoded.Value().Discharges; len(got) != 0 {
-		t.Fatalf("publication retained interrupted cases: %+v", got)
+	if value, err := encoded.Value(); err != nil || len(value.Discharges) != 0 {
+		t.Fatalf("publication retained interrupted cases: %+v, %v", value.Discharges, err)
 	}
 	fn := pkg.Func("Small")
 	condition := ssacall.CallCondition{Outcome: ssacall.OutcomeTrue}

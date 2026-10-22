@@ -46,7 +46,11 @@ func HeavyPredicate(err error, sink *int) bool { ` + strings.Repeat("if err != n
 			if strings.HasPrefix(object.Name(), "Heavy") {
 				t.Errorf("interrupted %s inference must not publish a fact", object.Name())
 			}
-			publishedFacts[object.Name()] = published.(*publishedFact).Value()
+			value, err := published.(*publishedFact).Value()
+			if err != nil {
+				t.Fatal(err)
+			}
+			publishedFacts[object.Name()] = value
 		}
 		result, runErr := run(pass)
 		if runErr != nil {
