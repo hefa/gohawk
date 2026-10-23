@@ -120,15 +120,16 @@ type GraphEvidence struct {
 // refreshing one. Tracing must not change inference by warming the graph cache.
 // Callers should skip this query entirely when observation is disabled.
 func CachedGraphEvidence(function *ssa.Function) GraphEvidence {
-	regionGraphs.Lock()
-	element, found := regionGraphs.entries[function]
+	graphs := graphsOf(function)
+	graphs.Lock()
+	element, found := graphs.entries[function]
 	if !found {
-		regionGraphs.Unlock()
+		graphs.Unlock()
 		return GraphEvidence{}
 	}
 	entry := element.Value.(*regionGraphEntry) //nolint:forcetypeassert // The list holds only graph entries.
 	graph := entry.graph
-	regionGraphs.Unlock()
+	graphs.Unlock()
 	if graph == nil {
 		return GraphEvidence{Cached: true, Building: true}
 	}

@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
@@ -287,17 +286,16 @@ func valueOrderKey(value ssa.Value) string {
 	return "value:" + value.String()
 }
 
-// functionNames keeps each function's name: ssa writes the name out again
-// every time it is asked, and ordering keys and fresh object origins ask
-// for the same few names many times.
-var functionNames sync.Map
-
+// functionName returns the function's name, kept with its program's state:
+// ssa writes the name out again every time it is asked, and ordering keys
+// and fresh object origins ask for the same few names many times.
 func functionName(function *ssa.Function) string {
-	if name, ok := functionNames.Load(function); ok {
+	names := &stateOf(function).names
+	if name, ok := names.Load(function); ok {
 		return name.(string) //nolint:forcetypeassert // The map holds only names.
 	}
 	name := function.String()
-	functionNames.Store(function, name)
+	names.Store(function, name)
 	return name
 }
 

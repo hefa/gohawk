@@ -53,76 +53,35 @@ type heapEntry struct {
 // generation of each summary it consulted; a projection finishing on
 // demand, which only fills in what a cycle cut, does not count, so graphs
 // around a call cycle are not rebuilt forever.
-var heapSummaries = struct {
+type summaryRegistry struct {
 	sync.Mutex
 	entries     map[*ssa.Function]heapEntry
 	generations map[*ssa.Function]int
-	// counts holds how many entries each program has, for the limit.
-	counts map[*ssa.Program]int
-}{entries: map[*ssa.Function]heapEntry{}, generations: map[*ssa.Function]int{}, counts: map[*ssa.Program]int{}}
-
-// Release forgets every summary, graph and memo kept for the functions of
-// program. A process that analyzes one package and exits need not call it.
-// One that analyzes many calls it once each package is done, so that a
-// package's state neither keeps its memory alive nor counts against the
-// limits of the packages analyzed after it.
-func Release(program *ssa.Program) {
-	heapSummaries.Lock()
-	for function := range heapSummaries.entries {
-		if function.Prog == program {
-			delete(heapSummaries.entries, function)
-		}
-	}
-	for function := range heapSummaries.generations {
-		if function.Prog == program {
-			delete(heapSummaries.generations, function)
-		}
-	}
-	delete(heapSummaries.counts, program)
-	heapSummaries.Unlock()
-	callCycleReach.Lock()
-	for function := range callCycleReach.reach {
-		if function.Prog == program {
-			delete(callCycleReach.reach, function)
-		}
-	}
-	for function := range callCycleReach.metadata {
-		if function.Prog == program {
-			delete(callCycleReach.metadata, function)
-		}
-	}
-	callCycleReach.Unlock()
-	releaseGraphs(program)
-	functionNames.Range(func(key, _ any) bool {
-		if key.(*ssa.Function).Prog == program { //nolint:forcetypeassert // The map holds only functions.
-			functionNames.Delete(key)
-		}
-		return true
-	})
 }
+
+// summariesOf returns the summary registry of the function's program.
+func summariesOf(function *ssa.Function) *summaryRegistry { return &stateOf(function).summaries }
 
 // RegisterHeapSummary makes the summary available to every graph built
 // afterwards for calls to the function. A summary that differs from what
 // the registry held evicts the cached graphs that consulted the old one.
 func RegisterHeapSummary(function *ssa.Function, summary HeapSummary) {
+	registry := summariesOf(function)
 	if function == nil {
 		return
 	}
-	heapSummaries.Lock()
-	previous, ok := heapSummaries.entries[function]
-	if !ok && heapSummaries.counts[function.Prog] >= heapSummaryLimit {
-		heapSummaries.Unlock()
+	registry.Lock()
+	previous, ok := registry.entries[function]
+	if !ok && len(registry.entries) >= heapSummaryLimit {
+		registry.Unlock()
 		return
 	}
-	if !ok {
-		heapSummaries.counts[function.Prog]++
-	}
-	heapSummaries.entries[function] = heapEntry{summary: summary}
+	registry.entries[function] = heapEntry{summary: summary}
 	changed := !ok || previous.state != heapEntryReady || !heapSummariesEqual(previous.summary, summary)
 	if changed {
-		heapSummaries.generations[function]++
+		registry.generations[function]++
 	}
-	heapSummaries.Unlock()
+	registry.Unlock()
 	if changed {
 		invalidateDependents(function)
 	}
@@ -131,22 +90,24 @@ func RegisterHeapSummary(function *ssa.Function, summary HeapSummary) {
 // heapSummaryGeneration returns how many times the function's summary has
 // been replaced or dropped.
 func heapSummaryGeneration(function *ssa.Function) int {
-	heapSummaries.Lock()
-	defer heapSummaries.Unlock()
-	return heapSummaries.generations[function]
+	registry := summariesOf(function)
+	registry.Lock()
+	defer registry.Unlock()
+	return registry.generations[function]
 }
 
 // forgetOnDemandSummary drops a summary projected from a graph that was
 // found stale, and reports whether there was one to drop.
 func forgetOnDemandSummary(function *ssa.Function) bool {
-	heapSummaries.Lock()
-	defer heapSummaries.Unlock()
-	entry, ok := heapSummaries.entries[function]
+	registry := summariesOf(function)
+	registry.Lock()
+	defer registry.Unlock()
+	entry, ok := registry.entries[function]
 	if !ok || !entry.onDemand {
 		return false
 	}
-	delete(heapSummaries.entries, function)
-	heapSummaries.generations[function]++
+	delete(registry.entries, function)
+	registry.generations[function]++
 	return true
 }
 
@@ -185,9 +146,10 @@ func RegisteredHeapSummary(function *ssa.Function) (HeapSummary, bool) {
 // the summary when it is ready, and no answer while it is being projected
 // or when its projection was found unavailable.
 func registeredHeapSummary(function *ssa.Function) (HeapSummary, bool) {
-	heapSummaries.Lock()
-	defer heapSummaries.Unlock()
-	entry, ok := heapSummaries.entries[function]
+	registry := summariesOf(function)
+	registry.Lock()
+	defer registry.Unlock()
+	entry, ok := registry.entries[function]
 	return entry.summary, ok && entry.state == heapEntryReady
 }
 
@@ -200,30 +162,30 @@ func registeredHeapSummary(function *ssa.Function) (HeapSummary, bool) {
 // projected privately instead, which yields the summary the other analyzer
 // is about to register.
 func projectHeapOnDemand(function *ssa.Function) (HeapSummary, bool) {
+	registry := summariesOf(function)
 	if function == nil || len(function.Blocks) == 0 {
 		return HeapSummary{}, false
 	}
-	heapSummaries.Lock()
-	if entry, ok := heapSummaries.entries[function]; ok {
-		heapSummaries.Unlock()
+	registry.Lock()
+	if entry, ok := registry.entries[function]; ok {
+		registry.Unlock()
 		if entry.state == heapEntryProjecting {
 			return ProjectHeap(function)
 		}
 		return entry.summary, entry.state == heapEntryReady
 	}
-	heapSummaries.entries[function] = heapEntry{state: heapEntryProjecting}
-	heapSummaries.counts[function.Prog]++
-	heapSummaries.Unlock()
+	registry.entries[function] = heapEntry{state: heapEntryProjecting}
+	registry.Unlock()
 	summary, ok := ProjectHeap(function)
 	if ok {
-		heapSummaries.Lock()
-		heapSummaries.entries[function] = heapEntry{summary: summary, onDemand: true}
-		heapSummaries.Unlock()
+		registry.Lock()
+		registry.entries[function] = heapEntry{summary: summary, onDemand: true}
+		registry.Unlock()
 		return summary, true
 	}
-	heapSummaries.Lock()
-	heapSummaries.entries[function] = heapEntry{state: heapEntryMissing}
-	heapSummaries.Unlock()
+	registry.Lock()
+	registry.entries[function] = heapEntry{state: heapEntryMissing}
+	registry.Unlock()
 	return summary, false
 }
 
@@ -241,11 +203,14 @@ func projectHeapOnDemand(function *ssa.Function) (HeapSummary, bool) {
 // callCycleReach memoizes, per function, the functions of its package it
 // can reach through static calls. A package's call graph cannot leave it
 // and come back, because imports are acyclic, so the walk stays inside it.
-var callCycleReach = struct {
+type cycleMemo struct {
 	sync.Mutex
 	reach    map[*ssa.Function]map[*ssa.Function]bool
 	metadata map[*ssa.Function]*callCycleMetadata
-}{reach: map[*ssa.Function]map[*ssa.Function]bool{}, metadata: map[*ssa.Function]*callCycleMetadata{}}
+}
+
+// cyclesOf returns the call-cycle memo of the function's program.
+func cyclesOf(function *ssa.Function) *cycleMemo { return &stateOf(function).cycles }
 
 // sameCallCycle reports whether the callee, called from function, can call
 // back into function.
@@ -277,12 +242,13 @@ func instantiationWrapperCallsOrigin(function, callee *ssa.Function) bool {
 // reachableCallees returns the functions of the same package the function
 // reaches through static calls, itself excluded unless it recurses.
 func reachableCallees(function *ssa.Function) map[*ssa.Function]bool {
+	memo := cyclesOf(function)
 	if function == nil {
 		return nil
 	}
-	callCycleReach.Lock()
-	reach, ok := callCycleReach.reach[function]
-	callCycleReach.Unlock()
+	memo.Lock()
+	reach, ok := memo.reach[function]
+	memo.Unlock()
 	if ok {
 		return reach
 	}
@@ -301,9 +267,9 @@ func reachableCallees(function *ssa.Function) map[*ssa.Function]bool {
 		reach[next] = true
 		pending = append(pending, cycleMetadata(next).callees...)
 	}
-	callCycleReach.Lock()
-	callCycleReach.reach[function] = reach
-	callCycleReach.Unlock()
+	memo.Lock()
+	memo.reach[function] = reach
+	memo.Unlock()
 	return reach
 }
 
@@ -318,9 +284,10 @@ type callCycleMetadata struct {
 // cycleMetadata shares body discovery across reachability roots. Competing
 // readers may discover privately, but all reuse the first published inventory.
 func cycleMetadata(function *ssa.Function) *callCycleMetadata {
-	callCycleReach.Lock()
-	metadata := callCycleReach.metadata[function]
-	callCycleReach.Unlock()
+	memo := cyclesOf(function)
+	memo.Lock()
+	metadata := memo.metadata[function]
+	memo.Unlock()
 	if metadata != nil {
 		return metadata
 	}
@@ -339,12 +306,12 @@ func cycleMetadata(function *ssa.Function) *callCycleMetadata {
 			metadata.callees = append(metadata.callees, origin)
 		}
 	}
-	callCycleReach.Lock()
-	defer callCycleReach.Unlock()
-	if published := callCycleReach.metadata[function]; published != nil {
+	memo.Lock()
+	defer memo.Unlock()
+	if published := memo.metadata[function]; published != nil {
 		return published
 	}
-	callCycleReach.metadata[function] = metadata
+	memo.metadata[function] = metadata
 	return metadata
 }
 

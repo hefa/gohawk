@@ -111,13 +111,13 @@ type File struct{ fd int }
 func keep(f *File) *File { return f }
 `)
 	function := pkg.Func("keep")
-	heapSummaries.Lock()
-	heapSummaries.entries[function] = heapEntry{state: heapEntryProjecting}
-	heapSummaries.Unlock()
+	summariesOf(function).Lock()
+	summariesOf(function).entries[function] = heapEntry{state: heapEntryProjecting}
+	summariesOf(function).Unlock()
 	t.Cleanup(func() {
-		heapSummaries.Lock()
-		delete(heapSummaries.entries, function)
-		heapSummaries.Unlock()
+		summariesOf(function).Lock()
+		delete(summariesOf(function).entries, function)
+		summariesOf(function).Unlock()
 	})
 	summary, ok := projectHeapOnDemand(function)
 	if !ok || !strings.Contains(summary.String(), "edge R0 -> P0 must") {
