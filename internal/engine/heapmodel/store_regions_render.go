@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
@@ -269,21 +270,35 @@ func valueOrderKey(value ssa.Value) string {
 	case nil:
 		return ""
 	case *ssa.Parameter:
-		return "param:" + typed.Parent().String() + "#" + strconv.Itoa(slices.Index(typed.Parent().Params, typed))
+		return "param:" + functionName(typed.Parent()) + "#" + strconv.Itoa(slices.Index(typed.Parent().Params, typed))
 	case *ssa.FreeVar:
-		return "free:" + typed.Parent().String() + "#" + strconv.Itoa(slices.Index(typed.Parent().FreeVars, typed))
+		return "free:" + functionName(typed.Parent()) + "#" + strconv.Itoa(slices.Index(typed.Parent().FreeVars, typed))
 	case *ssa.Global:
 		return "global:" + typed.Pkg.Pkg.Path() + "." + typed.Name()
 	case *ssa.Function:
-		return "func:" + typed.String()
+		return "func:" + functionName(typed)
 	case ssa.Instruction:
 		block := typed.Block()
 		if block == nil {
 			return "value:" + value.String()
 		}
-		return "instr:" + block.Parent().String() + "#" + strconv.Itoa(block.Index) + "." + strconv.Itoa(slices.Index(block.Instrs, typed))
+		return "instr:" + functionName(block.Parent()) + "#" + strconv.Itoa(block.Index) + "." + strconv.Itoa(slices.Index(block.Instrs, typed))
 	}
 	return "value:" + value.String()
+}
+
+// functionNames keeps each function's name: ssa writes the name out again
+// every time it is asked, and ordering keys and fresh object origins ask
+// for the same few names many times.
+var functionNames sync.Map
+
+func functionName(function *ssa.Function) string {
+	if name, ok := functionNames.Load(function); ok {
+		return name.(string) //nolint:forcetypeassert // The map holds only names.
+	}
+	name := function.String()
+	functionNames.Store(function, name)
+	return name
 }
 
 // orderedPointees returns a set's members in orderedSlots' order.
