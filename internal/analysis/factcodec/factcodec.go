@@ -1,5 +1,9 @@
 // Package factcodec publishes immutable summaries as opaque, deterministic
-// binary facts. Envelope hides nested schemas from gob's per-stream descriptor
+// binary facts. Summary structs that are published in bulk mark themselves
+// `cbor:",toarray"`, so a struct is an array of its exported fields in order
+// rather than a map keyed by field name: every importer of a package reads
+// and decodes its facts, and field names were half of lifecycle fact bytes.
+// Changing such a struct's fields changes the wire layout; bump wireHeader. Envelope hides nested schemas from gob's per-stream descriptor
 // work; CBOR encodes the payload without another set of type descriptors.
 // Domain passes still own validation and unknown/proven semantics. This private
 // wire format is versioned independently of domain schemas; changing the tool
@@ -15,7 +19,7 @@ import (
 )
 
 const (
-	wireHeader      = "GHF\x01"
+	wireHeader      = "GHF\x02"
 	maxPayloadBytes = 16 << 20
 )
 

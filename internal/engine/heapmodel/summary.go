@@ -132,6 +132,7 @@ const (
 // HeapRoot is one object a caller can name. A global is named by its
 // package path and name, so a caller's graph can find the same variable.
 type HeapRoot struct {
+	_       struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Kind    HeapRootKind
 	Index   int
 	Package string
@@ -141,6 +142,7 @@ type HeapRoot struct {
 // HeapSlot is a location beneath a root: the root's object itself when
 // Path is empty, else the field or element the joined access path selects.
 type HeapSlot struct {
+	_    struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Root HeapRoot
 	Path string
 }
@@ -168,6 +170,7 @@ const (
 // its summary, so two fresh objects with one origin, such as the two
 // results of one call, stay two objects when the summary is applied.
 type HeapTarget struct {
+	_      struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Kind   HeapTargetKind
 	Slot   HeapSlot
 	Origin string
@@ -177,6 +180,7 @@ type HeapTarget struct {
 // HeapEdge says the slot may hold the target at exit; Must says it does on
 // every normal return, and that nothing else does.
 type HeapEdge struct {
+	_    struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	From HeapSlot
 	To   HeapTarget
 	Must bool
@@ -203,6 +207,7 @@ const (
 // or which lifecycle method released it. Every says the effect holds on
 // every normal return.
 type HeapEffect struct {
+	_       struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Slot    HeapSlot
 	Escape  HeapEscape
 	Release string
@@ -211,6 +216,7 @@ type HeapEffect struct {
 
 // HeapSummary is the projection of one function's heap.
 type HeapSummary struct {
+	_         struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Version   int
 	Edges     []HeapEdge
 	Effects   []HeapEffect
@@ -226,6 +232,7 @@ type HeapSummary struct {
 // claim the joined edges cannot express: a constructor may return the
 // parameter itself on one path and a wrapper holding it on another.
 type HeapHold struct {
+	_         struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Result    int
 	Parameter int
 	Must      bool
@@ -247,6 +254,7 @@ const (
 // HeapRequirement says the function relies on the object at Slot in the
 // way Kind names, on every normal return.
 type HeapRequirement struct {
+	_      struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Slot   HeapSlot
 	Kind   HeapRequirementKind
 	Method string

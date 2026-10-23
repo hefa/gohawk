@@ -30,6 +30,7 @@ import (
 // or every normal return when Condition is empty. Path is a joined access
 // path, empty for the parameter itself.
 type Discharge struct {
+	_         struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Condition ssacall.CallCondition
 	Parameter int
 	Method    string

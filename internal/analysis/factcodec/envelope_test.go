@@ -68,7 +68,7 @@ func TestEnvelopeRejectsInvalidData(t *testing.T) {
 	}
 	for name, data := range map[string][]byte{
 		"legacy-json":   []byte(`{"Mask":1}`),
-		"wrong-version": []byte("GHF\x02\xa0"),
+		"wrong-version": []byte("GHF\x01\xa0"),
 		"truncated":     valid[:len(valid)-1],
 		"trailing":      append(bytes.Clone(valid), 0),
 		"null":          []byte(wireHeader + "\xf6"),

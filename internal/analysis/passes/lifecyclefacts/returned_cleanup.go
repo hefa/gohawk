@@ -17,12 +17,14 @@ const returnedCleanupVersion = 1
 
 // ReturnedCleanupSummary contains exact callback-result relations for a factory.
 type ReturnedCleanupSummary struct {
+	_       struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Version int
 	Effects []ReturnedCleanupEffect
 }
 
 // ReturnedCleanupEffect associates a factory relation with one completion verb.
 type ReturnedCleanupEffect struct {
+	_        struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Relation lifecycle.ReturnedCleanupRelation
 	Method   string
 	Invoke   bool

@@ -15,6 +15,7 @@ import (
 // consumer may only treat it as unknown, never as settled. This package is
 // internal analysis infrastructure, not a public extension API.
 type Fact struct {
+	_    struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Must MustClaims
 	May  MayClaims
 	// Discharges are the exact cleanup claims, unconditional and conditional
@@ -49,6 +50,7 @@ type Fact struct {
 // claims of the same polarity, ReturnedOwner, Stored, and ReceiverStore, are
 // read from Heap rather than stored; see heap.go.
 type MustClaims struct {
+	_ struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	// ReturnedView narrows ReturnedOwner: the parameter is stored in the
 	// returned struct, but no method of that type releases the field, so the
 	// caller keeps the obligation. See returned_views.go.
@@ -72,6 +74,7 @@ type MustClaims struct {
 // retention claims of the same polarity, Retained and Kept, are read from
 // Heap rather than stored; see heap.go.
 type MayClaims struct {
+	_ struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	// LoopReleased marks parameters whose derived values the callee releases
 	// inside a loop, as a variadic close helper does to each of its files.
 	// Which element an iteration releases is decided by iteration, so a
