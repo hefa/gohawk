@@ -71,6 +71,14 @@ func (policy SuccessorPolicy) EdgesWithin(block, predecessor *ssa.BasicBlock, gu
 func (policy SuccessorPolicy) edgesWithFormats(
 	block, predecessor *ssa.BasicBlock, guards PathGuards, budget *proofs.SearchBudget, formats *guardFormats,
 ) []SuccessorEdge {
+	return policy.appendEdgesWithFormats(nil, block, predecessor, guards, budget, formats)
+}
+
+// appendEdgesWithFormats appends the edges to edges, so a walk can reuse one
+// buffer across steps; nil is returned on a cutoff.
+func (policy SuccessorPolicy) appendEdgesWithFormats(
+	edges []SuccessorEdge, block, predecessor *ssa.BasicBlock, guards PathGuards, budget *proofs.SearchBudget, formats *guardFormats,
+) []SuccessorEdge {
 	if !budget.Spend() {
 		return nil
 	}
@@ -78,7 +86,9 @@ func (policy SuccessorPolicy) edgesWithFormats(
 	if budget.Exhausted() {
 		return nil
 	}
-	edges := make([]SuccessorEdge, 0, len(successors))
+	if edges == nil {
+		edges = make([]SuccessorEdge, 0, len(successors))
+	}
 	for _, successor := range successors {
 		if !budget.Spend() {
 			return nil

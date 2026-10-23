@@ -180,6 +180,10 @@ type obligationWalk struct {
 	policy  SuccessorPolicy
 	outcome ObligationOutcome
 	witness *ssa.Return
+	// edges and next are step's scratch: the driver copies the successors a
+	// step returns before it calls step again.
+	edges []SuccessorEdge
+	next  []obligationState
 }
 
 func (walk *obligationWalk) stopAtCutoff() bool {
@@ -205,11 +209,12 @@ func (walk *obligationWalk) step(state obligationState) ([]obligationState, bool
 			return nil, false
 		}
 	}
-	edges := walk.policy.edgesWithFormats(state.block, state.predecessor, state.guards, walk.flow.Budget, &walk.formats)
+	edges := walk.policy.appendEdgesWithFormats(walk.edges[:0], state.block, state.predecessor, state.guards, walk.flow.Budget, &walk.formats)
+	walk.edges = edges
 	if walk.stopAtCutoff() {
 		return nil, false
 	}
-	next := make([]obligationState, 0, len(edges))
+	next := walk.next[:0]
 	for _, edge := range edges {
 		covered := state.covered
 		if walk.flow.Edge != nil {
@@ -227,6 +232,7 @@ func (walk *obligationWalk) step(state obligationState) ([]obligationState, bool
 		}
 		next = append(next, obligationState{block: edge.To, predecessor: state.block, covered: covered, guards: edge.Guards})
 	}
+	walk.next = next
 	return next, true
 }
 
