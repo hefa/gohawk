@@ -143,8 +143,8 @@ func (set *Set[K]) All() iter.Seq2[K, bool] {
 			return
 		}
 		inline, count, flags := set.inline, set.count, set.flags
-		for index := range count {
-			if !yield(inline[index], flags&(1<<index) != 0) {
+		for index, key := range inline[:count] {
+			if !yield(key, flags&(1<<index) != 0) {
 				return
 			}
 		}
