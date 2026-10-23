@@ -26,7 +26,10 @@ import (
 // regionGraphCache keeps the most recently built graphs. Analyzers ask many
 // questions about one function in a row, and the graph is built once for
 // all of them; functions of packages already analyzed fall out of the cache.
-const regionGraphCache = 128
+// The analyzers of a unit run at once and interleave their functions, so a
+// cache of 128 evicted graphs another analyzer was about to ask for again;
+// 512 rebuilt a tenth less on moby without raising peak memory.
+const regionGraphCache = 512
 
 var regionGraphs = struct {
 	sync.Mutex
