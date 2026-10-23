@@ -28,6 +28,10 @@ func ProveMayAlias(value, target ssa.Value) proofs.AliasProof {
 
 // DefinitelySame reports exact graph identity, including through stable slots.
 func DefinitelySame(left, right ssa.Value) bool {
+	// A value outside any function body has no graph to ask.
+	if function := valueFunction(left); function == nil || len(function.Blocks) == 0 {
+		return false
+	}
 	graph := regionsOf(left)
 	return graph.available && valueFunction(right) == graph.function && graph.mustSame(left, right)
 }

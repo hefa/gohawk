@@ -22,6 +22,11 @@ import (
 // graph. It reports false when the graph is unavailable, or when the
 // function has no normal return to project.
 func ProjectHeap(function *ssa.Function) (HeapSummary, bool) {
+	// A function with no body has no graph to project; asking the cache
+	// would allocate an unavailable stand-in for every such callee.
+	if function == nil || len(function.Blocks) == 0 {
+		return HeapSummary{}, false
+	}
 	graph := regionsOfFunction(function)
 	// A graph that is being built, or is locked, is in use by another
 	// analyzer: a projection never reaches its own function again on one
