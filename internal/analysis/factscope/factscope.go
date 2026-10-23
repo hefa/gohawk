@@ -1,14 +1,16 @@
 // Package factscope decides which of a package's objects its importers can
 // see, so a pass need not publish facts no importer can read.
 //
-// An importer knows a dependency only through its export data, which holds
-// the objects reachable from the package's exported API: exported
-// package-level names and everything their types reach, through fields
-// (exported or not), method sets, signatures, interface methods, type
-// parameters and aliases. Function bodies are not loaded into go/types, so
-// nothing an unexported body alone names becomes an object an importer can
-// hold. A method outside that set is never an importer's callee, and its fact
-// is never read; x/tools would still carry it to every importer down the
+// An importer knows a dependency only through its export data, and can hold
+// a value only of a type the package's exported API leads it to: from
+// exported package-level names through exported and embedded fields, method
+// sets, exported methods' signatures, interface methods, type parameters and
+// aliases. Code in another package can follow neither an unexported field,
+// unless it is embedded and so promotes its type's methods, nor an
+// unexported method. Function bodies are not loaded into go/types, so
+// nothing an unexported body alone names is reachable either. A method of a
+// type outside that set is never an importer's callee, and its fact is
+// never read; x/tools would still carry it to every importer down the
 // build, since it re-exports every imported fact about a method.
 package factscope
 
@@ -60,13 +62,9 @@ func (visible Visible) Contains(object types.Object) bool {
 
 type walker struct {
 	// pkg, when set, keeps the walk to its own types.
-	pkg *types.Package
-	// callable keeps the walk to what code in another package can use: no
-	// unexported method, and no unexported field unless it is embedded,
-	// which promotes its methods.
-	callable bool
-	objects  map[types.Object]bool
-	types    map[types.Type]bool
+	pkg     *types.Package
+	objects map[types.Object]bool
+	types   map[types.Type]bool
 }
 
 func (walk walker) object(object types.Object) {
@@ -134,7 +132,7 @@ func (walk walker) named(typed *types.Named) {
 
 func (walk walker) structure(typed *types.Struct) {
 	for field := range typed.Fields() {
-		if !walk.callable || field.Exported() || field.Embedded() {
+		if field.Exported() || field.Embedded() {
 			walk.object(field)
 		}
 	}
@@ -149,10 +147,16 @@ func (walk walker) iface(typed *types.Interface) {
 	}
 }
 
+// method marks a method visible. Code in another package can call only an
+// exported one, so only its signature leads anywhere; an unexported method
+// is still visible, since an importer asking which methods of a result type
+// release its fields reads their summaries.
 func (walk walker) method(method *types.Func) {
-	if !walk.callable || method.Exported() {
+	if method.Exported() {
 		walk.object(method)
+		return
 	}
+	walk.objects[method] = true
 }
 
 func (walk walker) alias(typed *types.Alias) {
@@ -209,9 +213,7 @@ func Receiver(object *types.Func) *types.TypeName {
 // Types returns every declared type, of pkg or of another package, that
 // code importing pkg can hold a value of and call a method on through pkg's
 // API: the types whose method facts pkg must carry for its importers.
-// Unlike API it follows other packages' types. An importer is another
-// package, so it can follow neither an unexported method nor an unexported
-// field; an embedded one still promotes the methods of its type. The fact
+// Unlike API it follows other packages' types. The fact
 // passes of one unit share the answer.
 func Types(pkg *types.Package) map[*types.TypeName]bool {
 	typesCache.Lock()
@@ -219,7 +221,7 @@ func Types(pkg *types.Package) map[*types.TypeName]bool {
 	if typesCache.pkg == pkg {
 		return typesCache.types
 	}
-	walk := walker{callable: true, objects: map[types.Object]bool{}, types: map[types.Type]bool{}}
+	walk := walker{objects: map[types.Object]bool{}, types: map[types.Type]bool{}}
 	scope := pkg.Scope()
 	for _, name := range scope.Names() {
 		if token.IsExported(name) {
