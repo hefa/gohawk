@@ -66,6 +66,10 @@ type Record struct {
 	// ImportedFactTypes splits each fingerprint by fact type, naming which
 	// family changed when a fingerprint differs.
 	ImportedFactTypes map[string]map[string]string `json:"imported_fact_types"`
+	// ImportedFactTypeBytes totals the imported payload bytes by fact type:
+	// every importer reads and decodes them, so the largest types are where
+	// a smaller fact saves the most.
+	ImportedFactTypeBytes map[string]int64 `json:"imported_fact_type_bytes"`
 	// PeakRSSKiB is the process high-water mark when analysis finished, or
 	// nil when the platform does not report it.
 	PeakRSSKiB *int64 `json:"peak_rss_kib"`
@@ -140,26 +144,27 @@ func (s *session) writeAllocations() error {
 // importedFacts sizes, counts and fingerprints the unit's imported fact
 // files. unitchecker has already read every one of them before analysis
 // starts, and has registered every fact type with gob.
-func importedFacts(unit vetunit.Config) (int64, int, map[string]string, map[string]map[string]string, error) {
+func importedFacts(unit vetunit.Config) (int64, int, map[string]string, map[string]map[string]string, map[string]int64, error) {
 	var total int64
 	var count int
+	typeBytes := map[string]int64{}
 	digests := make(map[string]string, len(unit.PackageVetx))
 	byType := make(map[string]map[string]string, len(unit.PackageVetx))
 	for importPath, file := range unit.PackageVetx {
 		data, err := os.ReadFile(file) //nolint:gosec // go vet names the imported fact files.
 		if err != nil {
-			return 0, 0, nil, nil, fmt.Errorf("read imported facts of %s: %w", importPath, err)
+			return 0, 0, nil, nil, nil, fmt.Errorf("read imported facts of %s: %w", importPath, err)
 		}
-		digest, types, facts, err := factDigest(data)
+		digest, types, facts, err := factDigest(data, typeBytes)
 		if err != nil {
-			return 0, 0, nil, nil, fmt.Errorf("fingerprint imported facts of %s: %w", importPath, err)
+			return 0, 0, nil, nil, nil, fmt.Errorf("fingerprint imported facts of %s: %w", importPath, err)
 		}
 		total += int64(len(data))
 		count += facts
 		digests[importPath] = digest
 		byType[importPath] = types
 	}
-	return total, count, digests, byType, nil
+	return total, count, digests, byType, typeBytes, nil
 }
 
 // wireFact mirrors the gob record x/tools writes for each fact; gob matches
@@ -175,7 +180,7 @@ type wireFact struct {
 // types in map order, so equal facts can produce different files. The
 // digest covers each fact's package, object, type and payload encoding,
 // sorted.
-func factDigest(data []byte) (string, map[string]string, int, error) {
+func factDigest(data []byte, typeBytes map[string]int64) (string, map[string]string, int, error) {
 	if len(data) == 0 {
 		return "empty", nil, 0, nil
 	}
@@ -191,6 +196,9 @@ func factDigest(data []byte) (string, map[string]string, int, error) {
 			return "", nil, 0, err
 		}
 		factType := fmt.Sprintf("%T", fact.Fact)
+		typeBytes[factType] += int64(len(payload))
+		// x/tools repeats the package path with every fact it writes.
+		typeBytes["(package and object paths)"] += int64(len(fact.PkgPath) + len(fact.Object))
 		entry := fmt.Sprintf("%q %q %s %x", fact.PkgPath, fact.Object, factType, payload)
 		entries = append(entries, entry)
 		entriesByType[factType] = append(entriesByType[factType], entry)
@@ -338,24 +346,25 @@ func (s *session) write() error {
 	finished := time.Now()
 	pprof.StopCPUProfile()
 	closeErr := errors.Join(s.profile.Close(), s.writeAllocations())
-	factBytes, factCount, factDigests, factTypes, factErr := importedFacts(s.unit)
+	factBytes, factCount, factDigests, factTypes, factTypeBytes, factErr := importedFacts(s.unit)
 	if factErr != nil {
 		return errors.Join(closeErr, factErr)
 	}
 	s.mu.Lock()
 	first := s.first
 	record := Record{
-		Package:           s.unit.ImportPath,
-		ID:                s.unit.ID,
-		FactsOnly:         s.unit.VetxOnly,
-		SetupSeconds:      first.Sub(s.started).Seconds(),
-		AnalysisSeconds:   finished.Sub(first).Seconds(),
-		ImportedFactBytes: factBytes,
-		ImportedFactCount: factCount,
-		ImportedFacts:     factDigests,
-		ImportedFactTypes: factTypes,
-		PeakRSSKiB:        peakRSSKiB(),
-		Analyzers:         s.analyzer,
+		Package:               s.unit.ImportPath,
+		ID:                    s.unit.ID,
+		FactsOnly:             s.unit.VetxOnly,
+		SetupSeconds:          first.Sub(s.started).Seconds(),
+		AnalysisSeconds:       finished.Sub(first).Seconds(),
+		ImportedFactBytes:     factBytes,
+		ImportedFactCount:     factCount,
+		ImportedFacts:         factDigests,
+		ImportedFactTypes:     factTypes,
+		ImportedFactTypeBytes: factTypeBytes,
+		PeakRSSKiB:            peakRSSKiB(),
+		Analyzers:             s.analyzer,
 	}
 	data, err := json.Marshal(record)
 	s.mu.Unlock()
