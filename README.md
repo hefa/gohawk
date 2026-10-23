@@ -71,6 +71,25 @@ analysis, and [Staticcheck](https://staticcheck.dev/) covers a broad range of
 general bugs. Resource management and concurrency are among the last big
 gaps, and that is the domain gohawk focuses on.
 
+## Performance
+
+gohawk analyzes each package in one process, decoding every dependency's
+export data once and keeping its facts in memory, and caches each package's
+results so a rerun analyzes only what changed.
+
+| Repository | First run | Unchanged rerun |
+| --- | --- | --- |
+| [caddy](https://github.com/caddyserver/caddy) | ~14 s | 0.6 s |
+| [containerd](https://github.com/containerd/containerd) | ~15 s | — |
+| [moby](https://github.com/moby/moby) | ~20 s | — |
+| [kubernetes](https://github.com/kubernetes/kubernetes) | 76 s | 13 s |
+
+Wall times for `gohawk -enable-all ./...` with four packages analyzed at once
+on an AMD EPYC 9645 with Go 1.27. The first run has an empty gohawk cache but a
+warm Go build cache: compiling a large module from scratch, which `go vet`
+also needs, can take far longer than the analysis. On kubernetes, running
+gohawk as a `go vet` tool took 287 s for the same first run.
+
 ## golangci-lint integration
 
 gohawk can run as a module plugin inside a custom golangci-lint binary. See the
