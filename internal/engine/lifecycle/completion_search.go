@@ -125,7 +125,8 @@ type completionSearch struct {
 	invokeTarget bool
 	// memo owns the cycle guard for callee bodies and the rule that an answer
 	// the guard cut short is not retained.
-	memo *ssacall.CallGraphMemo[completionKey, completionAnswer]
+	memo     *ssacall.CallGraphMemo[completionKey, completionAnswer]
+	contexts completionContexts
 	// paths collects where the completing calls of the body being covered
 	// touched the target; nil outside a body's coverage.
 	paths *completionPaths
@@ -153,6 +154,7 @@ func newCompletionSearch(method string, coverage CompletionCoverage, budget *pro
 		coverage:     coverage,
 		budget:       budget,
 		memo:         ssacall.NewCallGraphMemo[completionKey, completionAnswer](),
+		contexts:     completionContexts{},
 		returnedMemo: ssacall.NewCallGraphMemo[returnedCleanupKey, bool](),
 	}
 	forms := ssaflow.TransparentChangeInterface | ssaflow.TransparentChangeType |

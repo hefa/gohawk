@@ -21,12 +21,32 @@ import (
 // So do the constants fixing the enclosing body's parameters: the same call
 // inside a helper can complete under one binding and not another.
 type completionKey struct {
+	context     int
+	instruction ssa.Instruction
+	target      ssa.Value
+}
+
+// completionContext is what a search assumes about the body it is in. A
+// search asks about many instructions under few contexts, so its memo keys
+// name the context by a number and stay small.
+type completionContext struct {
 	bindings     *callbackBindings
-	instruction  ssa.Instruction
-	target       ssa.Value
 	invokeTarget bool
 	condition    ssacall.CallCondition
 	constants    string
+}
+
+// completionContexts numbers the contexts of one search and its nested
+// searches, which share its memo.
+type completionContexts map[completionContext]int
+
+func (contexts completionContexts) number(context completionContext) int {
+	number, ok := contexts[context]
+	if !ok {
+		number = len(contexts)
+		contexts[context] = number
+	}
+	return number
 }
 
 type completionAnswer struct {
@@ -51,10 +71,11 @@ func (answer completionAnswer) proof(method string) proofs.CompletionProof {
 // target with the coverage their launch demands. The answer is unavailable
 // when no callee body was available to search.
 func (search *completionSearch) completes(instruction ssa.Instruction, target ssa.Value) completionAnswer {
-	key := completionKey{
-		instruction: instruction, target: target, invokeTarget: search.invokeTarget, bindings: search.bindings, condition: search.condition,
+	context := search.contexts.number(completionContext{
+		bindings: search.bindings, invokeTarget: search.invokeTarget, condition: search.condition,
 		constants: search.constants.Key(instruction.Parent()),
-	}
+	})
+	key := completionKey{context: context, instruction: instruction, target: target}
 	return search.memo.Compose(key, search.budget, func() completionAnswer {
 		return search.searchCompletes(instruction, target)
 	}, func(_ ssacall.SummaryUnavailable, partial completionAnswer) completionAnswer {
