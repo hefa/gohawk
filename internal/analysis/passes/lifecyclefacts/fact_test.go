@@ -2,6 +2,7 @@ package lifecyclefacts
 
 import (
 	"go/types"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -800,5 +801,43 @@ func Exported() {}
 	version = heapmodel.SummaryVersion
 	if _, ok := factForFunction(pass, pkg.Func("Exported")); !ok {
 		t.Fatal("current heap edge semantics should be imported")
+	}
+}
+
+// TestPublishedFactRoundTripsExactly pins the string-table wire format: a
+// published fact decodes to exactly the summary that was published, with
+// repeated and empty strings, and nil and empty lists, intact.
+func TestPublishedFactRoundTripsExactly(t *testing.T) {
+	global := heapmodel.HeapSlot{Root: heapmodel.HeapRoot{Kind: heapmodel.HeapGlobal, Package: "io", Name: "EOF"}}
+	parameter := heapmodel.HeapSlot{Root: heapmodel.HeapRoot{Kind: heapmodel.HeapParameter}, Path: "field:0/field:3"}
+	fact := Fact{
+		Must: MustClaims{OwnedResults: 1},
+		Heap: &heapmodel.HeapSummary{
+			Version: heapmodel.SummaryVersion,
+			Edges: []heapmodel.HeapEdge{{
+				From: parameter,
+				To:   heapmodel.HeapTarget{Kind: heapmodel.HeapTargetFresh, Origin: "bufio.NewReaderSize", Object: 2},
+			}, {From: global, To: heapmodel.HeapTarget{Kind: heapmodel.HeapTargetSlot, Slot: parameter}, Must: true}},
+			Effects:   []heapmodel.HeapEffect{{Slot: global, Escape: 2, Every: true}, {Slot: parameter, Release: "Close"}},
+			Reads:     []heapmodel.HeapSlot{},
+			Requires:  []heapmodel.HeapRequirement{{Slot: parameter, Method: "Close"}},
+			Truncated: nil,
+		},
+	}
+	published := publish(fact)
+	data, err := published.GobEncode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded publishedFact
+	if err := decoded.GobDecode(data); err != nil {
+		t.Fatal(err)
+	}
+	got, err := decoded.Value()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, fact) {
+		t.Fatalf("round trip changed the fact:\n got %#v\nwant %#v", got.Heap, fact.Heap)
 	}
 }

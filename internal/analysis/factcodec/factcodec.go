@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	wireHeader      = "GHF\x02"
+	wireHeader      = "GHF\x03"
 	maxPayloadBytes = 16 << 20
 )
 
@@ -70,6 +70,24 @@ func Decode(data []byte, fact any) error {
 }
 
 var errNoPayload = errors.New("absent fact payload")
+
+// MarshalPart encodes part of a fact's payload, for a fact type that marshals
+// itself, with the deterministic options Encode uses and no header.
+func MarshalPart(part any) ([]byte, error) {
+	if encodeModeError != nil {
+		return nil, encodeModeError
+	}
+	return encodeMode.Marshal(part)
+}
+
+// UnmarshalPart decodes part of a fact's payload with the strict options
+// Decode uses.
+func UnmarshalPart(data []byte, part any) error {
+	if decodeModeError != nil {
+		return decodeModeError
+	}
+	return decodeMode.Unmarshal(data, part)
+}
 
 // Diagnose renders an encoded fact in CBOR diagnostic notation, for dumps
 // that must show the exact published payload.
