@@ -2,6 +2,7 @@ package ssaflow
 
 import (
 	"maps"
+	"slices"
 
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
 	"golang.org/x/tools/go/ssa"
@@ -25,14 +26,14 @@ import (
 type ReachingWalk struct {
 	forms      TransparentValueForm
 	opaquePhis bool
-	seen       map[ssa.Value]bool
+	seen       *visitedValues
 	budget     *proofs.SearchBudget
 	onRevisit  func()
 }
 
 // NewReachingWalk starts a fold that looks through forms.
 func NewReachingWalk(forms TransparentValueForm) ReachingWalk {
-	return ReachingWalk{forms: forms, seen: map[ssa.Value]bool{}}
+	return ReachingWalk{forms: forms, seen: &visitedValues{}}
 }
 
 // OpaquePhis keeps phi merges as leaves instead of examining their incoming
@@ -62,7 +63,7 @@ func (walk ReachingWalk) OnRevisit(observe func()) ReachingWalk {
 }
 
 func (walk ReachingWalk) revisited(value ssa.Value) bool {
-	if !walk.seen[value] {
+	if !walk.seen.has(value) {
 		return false
 	}
 	if walk.onRevisit != nil {
@@ -97,7 +98,7 @@ func (walk ReachingWalk) any(value ssa.Value, origin func(ssa.Value) bool, leaf 
 	if walk.revisited(value) {
 		return false
 	}
-	walk.seen[value] = true
+	walk.seen.add(value)
 	if inner, ok := UnwrapTransparentValue(value, walk.forms); ok {
 		return walk.any(inner, origin, leaf)
 	}
@@ -123,7 +124,7 @@ func (walk ReachingWalk) Every(value ssa.Value, leaf func(ReachingWalk, ssa.Valu
 	if !walk.budget.Spend() || value == nil || walk.revisited(value) {
 		return false
 	}
-	walk.seen[value] = true
+	walk.seen.add(value)
 	if inner, ok := UnwrapTransparentValue(value, walk.forms); ok {
 		return walk.Every(inner, leaf)
 	}
@@ -155,7 +156,7 @@ func (walk ReachingWalk) Mark(value ssa.Value) bool {
 	if !walk.budget.Spend() || walk.revisited(value) {
 		return false
 	}
-	walk.seen[value] = true
+	walk.seen.add(value)
 	return true
 }
 
@@ -174,7 +175,7 @@ func ResolveReachingValue[T any, K comparable](
 	if !walk.budget.Spend() || value == nil || walk.revisited(value) {
 		return zero, false
 	}
-	walk.seen[value] = true
+	walk.seen.add(value)
 	if inner, ok := UnwrapTransparentValue(value, walk.forms); ok {
 		return ResolveReachingValue(walk, inner, leaf, key)
 	}
@@ -204,6 +205,46 @@ func ResolveReachingValue[T any, K comparable](
 // branch copies the visited set so sibling phi edges are judged independently.
 func (walk ReachingWalk) branch() ReachingWalk {
 	return ReachingWalk{
-		forms: walk.forms, opaquePhis: walk.opaquePhis, seen: maps.Clone(walk.seen), budget: walk.budget, onRevisit: walk.onRevisit,
+		forms: walk.forms, opaquePhis: walk.opaquePhis, seen: walk.seen.clone(), budget: walk.budget, onRevisit: walk.onRevisit,
 	}
+}
+
+// visitedValues is a walk's cycle guard. Most walks visit a handful of
+// values, so the first few are kept inline and a map is built only past
+// them; a map per walk was most of what reaching folds allocated. Walks
+// copied by value share one set, as they shared one map.
+type visitedValues struct {
+	inline [8]ssa.Value
+	count  int
+	spill  map[ssa.Value]bool
+}
+
+func (set *visitedValues) has(value ssa.Value) bool {
+	if set.spill != nil {
+		return set.spill[value]
+	}
+	return slices.Contains(set.inline[:set.count], value)
+}
+
+func (set *visitedValues) add(value ssa.Value) {
+	switch {
+	case set.spill != nil:
+		set.spill[value] = true
+	case slices.Contains(set.inline[:set.count], value):
+	case set.count < len(set.inline):
+		set.inline[set.count] = value
+		set.count++
+	default:
+		set.spill = make(map[ssa.Value]bool, 2*len(set.inline))
+		for _, seen := range set.inline[:set.count] {
+			set.spill[seen] = true
+		}
+		set.spill[value] = true
+	}
+}
+
+func (set *visitedValues) clone() *visitedValues {
+	copied := *set
+	copied.spill = maps.Clone(set.spill)
+	return &copied
 }
