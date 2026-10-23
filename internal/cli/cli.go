@@ -114,6 +114,9 @@ func prepareUnit(arguments []string, analyzers []*analysis.Analyzer, runtime cli
 	vetunit.Sequence(arguments, analyzers, factPasses)
 	if unit.VetxOnly {
 		vetunit.SkipDiagnosticsOnly(analyzers)
+		// Lifecycle inference publishes the same facts while projecting only
+		// what its exported summaries can reach.
+		lifecyclefacts.Analyzer.Run = lifecyclefacts.RunForImporters
 	}
 	return vetprofile.Instrument(runtime.getenv(vetprofile.DirectoryVariable), unit, analyzers)
 }

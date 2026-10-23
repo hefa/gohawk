@@ -33,10 +33,24 @@ var Analyzer = &analysis.Analyzer{
 // lifecyclefacts shows which function the fact pass is working on.
 const traceAnalyzer = "lifecyclefacts"
 
-func run(pass *analysis.Pass) (any, error) {
+func run(pass *analysis.Pass) (any, error) { return summarizePackage(pass, false) }
+
+// RunForImporters is Run for a package analyzed only so its importers can read
+// its facts, as go vet analyzes a dependency. It projects a private function's
+// heap only when an exported function this pass summarizes can statically
+// reach it. Every other projection was registered for the package's own
+// diagnostics, which go vet discards for such a package; nothing reachable
+// consults it, so the published facts are those Run publishes.
+func RunForImporters(pass *analysis.Pass) (any, error) { return summarizePackage(pass, true) }
+
+func summarizePackage(pass *analysis.Pass, importersOnly bool) (any, error) {
 	functions, err := ssaflow.SourceSSAFunctions(pass)
 	if err != nil {
 		return nil, err
+	}
+	var reachable map[*ssa.Function]bool
+	if importersOnly {
+		reachable = reachableFromSummarized(functions)
 	}
 	summaries := make(Summaries, len(functions))
 	callbacks := newCallbackInference(pass, summaries)
@@ -59,7 +73,7 @@ func run(pass *analysis.Pass) (any, error) {
 			marker.Bodiless = append(marker.Bodiless, object.Name())
 		}
 		object := function.Object()
-		if len(function.Blocks) != 0 && (object == nil || !object.Exported() || len(function.Params) > 64) {
+		if projectsPrivately(function, reachable) {
 			heapmodel.RegisterHeapSummary(function, *projectHeap(function))
 		}
 		// Only exported functions can be called from a package that imports this
@@ -123,6 +137,67 @@ func run(pass *analysis.Pass) (any, error) {
 	// once both are summarized rather than while either is being proved.
 	exportCleanupContracts(pass, summaries)
 	return summaries, nil
+}
+
+// projectsPrivately reports whether a body the pass does not summarize is
+// projected for its callers. reachable is nil when every such body is.
+func projectsPrivately(function *ssa.Function, reachable map[*ssa.Function]bool) bool {
+	if len(function.Blocks) == 0 || summarized(function) {
+		return false
+	}
+	return reachable == nil || reachable[function]
+}
+
+// summarized reports whether the pass summarizes the function and may publish
+// its fact: an exported function with a body and a bounded parameter list.
+func summarized(function *ssa.Function) bool {
+	object := function.Object()
+	return object != nil && object.Exported() && len(function.Params) <= 64 && len(function.Blocks) != 0
+}
+
+// reachableFromSummarized returns the functions a summarized function names,
+// directly or through functions it names: a static callee, a closure, or a
+// function used as a value. A graph applies only the summaries of static
+// callees, so a function outside this set is never consulted while the
+// summarized functions are projected. An instantiation also reaches its origin.
+func reachableFromSummarized(functions []*ssa.Function) map[*ssa.Function]bool {
+	reachable := map[*ssa.Function]bool{}
+	var work []*ssa.Function
+	mark := func(function *ssa.Function) {
+		for _, candidate := range []*ssa.Function{function, function.Origin()} {
+			if candidate != nil && !reachable[candidate] {
+				reachable[candidate] = true
+				work = append(work, candidate)
+			}
+		}
+	}
+	for _, function := range functions {
+		if summarized(function) {
+			mark(function)
+		}
+	}
+	var operands []*ssa.Value
+	for len(work) > 0 {
+		function := work[len(work)-1]
+		work = work[:len(work)-1]
+		for _, block := range function.Blocks {
+			for _, instruction := range block.Instrs {
+				operands = instruction.Operands(operands[:0])
+				for _, operand := range operands {
+					if operand == nil {
+						continue
+					}
+					if named, ok := (*operand).(*ssa.Function); ok {
+						mark(named)
+					}
+				}
+			}
+		}
+		for _, anonymous := range function.AnonFuncs {
+			mark(anonymous)
+		}
+	}
+	return reachable
 }
 
 // calleesFirst orders the functions so that every static callee within the
