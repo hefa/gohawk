@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kojah/gohawk/internal/engine/heapmodel/flagset"
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
 	"golang.org/x/tools/go/ssa"
 )
@@ -97,11 +98,9 @@ const pathStar = "index:*"
 //
 // A set has a map's reference semantics: copies share one set, and the zero
 // value reads as empty and must not be written.
-type pointees struct{ s *pointeeSet }
+type pointees struct{ s *flagset.Set[slot] }
 
-type pointeeSet struct{ m map[slot]bool }
-
-func newPointees() pointees { return pointees{s: &pointeeSet{m: map[slot]bool{}}} }
+func newPointees() pointees { return pointees{s: &flagset.Set[slot]{}} }
 
 // pointeesOf returns a new set holding member.
 func pointeesOf(member slot, stale bool) pointees {
@@ -112,56 +111,24 @@ func pointeesOf(member slot, stale bool) pointees {
 
 func (set pointees) isNil() bool { return set.s == nil }
 
-func (set pointees) Len() int {
-	if set.s == nil {
-		return 0
-	}
-	return len(set.s.m)
-}
+func (set pointees) Len() int { return set.s.Len() }
 
 // get returns member's stale bit, false when absent.
 func (set pointees) get(member slot) bool {
-	if set.s == nil {
-		return false
-	}
-	return set.s.m[member]
+	stale, _ := set.s.Lookup(member)
+	return stale
 }
 
-func (set pointees) lookup(member slot) (stale, ok bool) {
-	if set.s == nil {
-		return false, false
-	}
-	stale, ok = set.s.m[member]
-	return stale, ok
-}
+func (set pointees) lookup(member slot) (stale, ok bool) { return set.s.Lookup(member) }
 
-func (set pointees) put(member slot, stale bool) { set.s.m[member] = stale }
+func (set pointees) put(member slot, stale bool) { set.s.Put(member, stale) }
 
-func (set pointees) remove(member slot) {
-	if set.s != nil {
-		delete(set.s.m, member)
-	}
-}
+func (set pointees) remove(member slot) { set.s.Remove(member) }
 
-func (set pointees) clearAll() {
-	if set.s != nil {
-		clear(set.s.m)
-	}
-}
+func (set pointees) clearAll() { set.s.Clear() }
 
 // all yields each member and its stale bit.
-func (set pointees) all() iter.Seq2[slot, bool] {
-	return func(yield func(slot, bool) bool) {
-		if set.s == nil {
-			return
-		}
-		for member, stale := range set.s.m {
-			if !yield(member, stale) {
-				return
-			}
-		}
-	}
-}
+func (set pointees) all() iter.Seq2[slot, bool] { return set.s.All() }
 
 // equal reports whether both sets hold the same members with the same bits;
 // a zero set equals an empty one.
@@ -175,13 +142,6 @@ func (set pointees) equal(other pointees) bool {
 		}
 	}
 	return true
-}
-
-// copyFrom adds every member of other with its bit, overwriting.
-func (set pointees) copyFrom(other pointees) {
-	for member, stale := range other.all() {
-		set.put(member, stale)
-	}
 }
 
 // add records a slot, keeping an entry stale once any addition was. Unknown
@@ -264,11 +224,7 @@ func (set pointees) absorbs(other pointees, stale func(slot, bool) bool) bool {
 	return true
 }
 
-func (set pointees) clone() pointees {
-	result := pointees{s: &pointeeSet{m: make(map[slot]bool, set.Len())}}
-	result.copyFrom(set)
-	return result
-}
+func (set pointees) clone() pointees { return pointees{s: set.s.Clone()} }
 
 // unknown reports whether the set admits any object.
 func (set pointees) unknown() bool {
