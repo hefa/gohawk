@@ -27,7 +27,7 @@ func StructurallyIdenticalWithin(left, right ssa.Value, budget *proofs.SearchBud
 		return true
 	}
 	forms := TransparentChangeInterface | TransparentChangeType | TransparentConvert | TransparentMakeInterface
-	if reachingLeaf(left, forms) && reachingLeaf(right, forms) {
+	if structuralLeaf(left) && structuralLeaf(right) {
 		// Each walk below would spend one visit and fold only its value.
 		// Most comparisons are of two such leaves; answer them without the
 		// walks, which were most of what reaching folds allocated.
@@ -43,6 +43,17 @@ func StructurallyIdenticalWithin(left, right ssa.Value, budget *proofs.SearchBud
 			return identicalLeaves(left, right, budget)
 		})
 	})
+}
+
+// structuralLeaf reports whether StructurallyIdenticalWithin's walk visits
+// only value itself: it is neither a phi nor a form the walk looks through.
+func structuralLeaf(value ssa.Value) bool {
+	forms := TransparentChangeInterface | TransparentChangeType | TransparentConvert | TransparentMakeInterface
+	if _, wrapped := UnwrapTransparentValue(value, forms); wrapped {
+		return false
+	}
+	_, phi := value.(*ssa.Phi)
+	return !phi
 }
 
 // identicalLeaves compares two values a structural identity walk reached.

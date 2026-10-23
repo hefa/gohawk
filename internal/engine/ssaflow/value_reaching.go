@@ -202,16 +202,6 @@ func ResolveReachingValue[T any, K comparable](
 	return resolved, true
 }
 
-// reachingLeaf reports whether a walk through forms that looks through phis
-// visits only value itself.
-func reachingLeaf(value ssa.Value, forms TransparentValueForm) bool {
-	if _, wrapped := UnwrapTransparentValue(value, forms); wrapped {
-		return false
-	}
-	_, phi := value.(*ssa.Phi)
-	return !phi
-}
-
 // branch copies the visited set so sibling phi edges are judged independently.
 func (walk ReachingWalk) branch() ReachingWalk {
 	return ReachingWalk{
