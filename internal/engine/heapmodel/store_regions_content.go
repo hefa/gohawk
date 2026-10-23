@@ -137,7 +137,7 @@ func (graph *regionGraph) unwrittenSole(state *regionState, target slot) (slot, 
 // such a set on every read. The result must not be changed.
 func (graph *regionGraph) contentView(state *regionState, target slot) pointees {
 	if member, ok := graph.contentSole(state, target); ok {
-		return graph.singleton(member)
+		return graph.singleton(member, false)
 	}
 	return graph.content(state, target)
 }
@@ -162,17 +162,24 @@ func (graph *regionGraph) contentSole(state *regionState, target slot) (slot, bo
 	return graph.unwrittenSole(state, target)
 }
 
-// singleton returns the graph's read-only set holding exactly member.
-func (graph *regionGraph) singleton(member slot) pointees {
-	set, ok := graph.singletons[member]
+// singleton returns the graph's read-only set holding exactly member, with
+// its stale bit.
+func (graph *regionGraph) singleton(member slot, stale bool) pointees {
+	key := singletonKey{member: member, stale: stale}
+	set, ok := graph.singletons[key]
 	if !ok {
 		if graph.singletons == nil {
-			graph.singletons = map[slot]pointees{}
+			graph.singletons = map[singletonKey]pointees{}
 		}
-		set = pointees{member: false}
-		graph.singletons[member] = set
+		set = pointees{member: stale}
+		graph.singletons[key] = set
 	}
 	return set
+}
+
+type singletonKey struct {
+	member slot
+	stale  bool
 }
 
 func (graph *regionGraph) starSlot(target slot) slot {

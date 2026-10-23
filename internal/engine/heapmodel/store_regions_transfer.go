@@ -151,8 +151,23 @@ func (graph *regionGraph) allocate(state *regionState, alloc *ssa.Alloc) {
 	graph.clearSubtree(state, slot{region: site})
 }
 
-// selectStep returns the slots one step beneath each of the bases.
+// selectStep returns the slots one step beneath each of the bases. Its result
+// is read-only: setValue copies a value's first set, and every other caller
+// only reads. A single base, the usual case, is answered with the graph's
+// singleton set rather than a new one on every transfer of every round.
 func (graph *regionGraph) selectStep(bases pointees, step string) pointees {
+	if len(bases) == 1 {
+		for base, stale := range bases {
+			switch base.region.kind {
+			case regionUnknown:
+				return graph.singleton(base, stale)
+			case regionNil:
+				return pointees{}
+			case regionSite, regionExternal, regionOpaque, regionPlaceholder, regionSnapshot, regionClosure:
+				return graph.singleton(slot{region: base.region, path: joinSlotPath(base.path, step)}, stale)
+			}
+		}
+	}
 	result := pointees{}
 	for base, stale := range bases {
 		switch base.region.kind {
