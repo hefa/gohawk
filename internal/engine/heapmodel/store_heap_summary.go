@@ -179,7 +179,7 @@ func (projection *heapProjection) nameRoots() {
 	for index, free := range function.FreeVars {
 		projection.roots[projection.graph.external(free)] = HeapRoot{Kind: HeapFreeVar, Index: index}
 	}
-	for key, object := range projection.graph.regions {
+	for key, object := range projection.graph.objects {
 		if key.kind != regionExternal {
 			continue
 		}

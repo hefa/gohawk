@@ -293,7 +293,13 @@ type regionGraph struct {
 	mu        sync.Mutex
 	function  *ssa.Function
 	available bool
-	regions   map[regionKey]*region
+	// objects interns the regions named by their origin and label alone,
+	// most of them; regions interns those that also name a source slot or a
+	// stamp, placeholders and nested snapshots, under the wider key. count
+	// is how many both hold, the next region's serial.
+	objects map[objectKey]*region
+	regions map[regionKey]*region
+	count   int32
 	// values maps each pointer-valued expression to its pointees. SSA
 	// values are immutable, so the map only grows during the fixpoint.
 	values map[ssa.Value]pointees
@@ -399,7 +405,8 @@ func buildRegionGraph(function *ssa.Function) *regionGraph {
 	}
 	graph := &regionGraph{
 		function:  function,
-		regions:   make(map[regionKey]*region, instructions),
+		objects:   make(map[objectKey]*region, instructions/2),
+		regions:   make(map[regionKey]*region, instructions/4),
 		values:    make(map[ssa.Value]pointees, instructions/2),
 		views:     map[ssa.Value]sliceView{},
 		entry:     make(map[*ssa.BasicBlock]*regionState, len(function.Blocks)),
@@ -422,13 +429,36 @@ func buildRegionGraph(function *ssa.Function) *regionGraph {
 }
 
 func (graph *regionGraph) intern(key regionKey) *region {
+	if key.source == nil && key.stamp == (versionStamp{}) {
+		object := objectKey{origin: key.origin, label: key.label, kind: key.kind}
+		if existing, ok := graph.objects[object]; ok {
+			return existing
+		}
+		created := graph.create(key)
+		graph.objects[object] = created
+		return created
+	}
 	if existing, ok := graph.regions[key]; ok {
 		return existing
 	}
-	serial := int32(min(len(graph.regions), math.MaxInt32))
-	created := &region{kind: key.kind, origin: key.origin, source: key.source, stamp: key.stamp, label: key.label, serial: serial}
+	created := graph.create(key)
 	graph.regions[key] = created
 	return created
+}
+
+// objectKey is a regionKey with no source slot or stamp.
+type objectKey struct {
+	origin ssa.Value
+	label  string
+	kind   regionKind
+}
+
+func (graph *regionGraph) create(key regionKey) *region {
+	serial := graph.count
+	if graph.count < math.MaxInt32 {
+		graph.count++
+	}
+	return &region{kind: key.kind, origin: key.origin, source: key.source, stamp: key.stamp, label: key.label, serial: serial}
 }
 
 func (graph *regionGraph) site(origin ssa.Value) *region {
