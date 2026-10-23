@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
 	gohawk "github.com/kojah/gohawk/analyzers"
@@ -18,9 +20,9 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
-// inProcessVariable selects the in-process runner instead of go vet. Both
+// goVetVariable selects go vet instead of the in-process runner. Both
 // analyze the same units the same way; the runner does it in one process.
-const inProcessVariable = "GOHAWK_IN_PROCESS"
+const goVetVariable = "GOHAWK_GO_VET"
 
 // runInProcess analyzes the requested packages with the in-process runner
 // and presents the findings as runViaGoVet presents go vet's.
@@ -47,6 +49,7 @@ func runInProcess(invocation *analysisInvocation, runtime cliRuntime) int {
 		Analyzers:    request.analyzers,
 		FactsOnlyRun: map[*analysis.Analyzer]func(*analysis.Pass) (any, error){lifecyclefacts.Analyzer: lifecyclefacts.RunForImporters},
 		Release:      heapmodel.Release,
+		CacheDir:     runnerCacheDir(runtime.getenv, request.tracing),
 	})
 	for _, failure := range failures {
 		writeLine(runtime.errorsOutput, "gohawk:", failure)
@@ -64,8 +67,10 @@ func runInProcess(invocation *analysisInvocation, runtime cliRuntime) int {
 	default:
 		code = renderDelegatedDiagnostics(merged, invocation.contextLines, runtime.output)
 	}
+	// As with go vet, a package that could not be analyzed fails the run
+	// even when the others' findings are printed.
 	if len(failures) > 0 {
-		return max(1, code)
+		return 1
 	}
 	return code
 }
@@ -77,6 +82,28 @@ type toolRequest struct {
 	buildFlags []string
 	patterns   []string
 	analyzers  []*analysis.Analyzer
+	// tracing records that a trace or timing flag was set; a cached unit
+	// would leave nothing to trace.
+	tracing bool
+}
+
+// cacheVariable names the directory the runner caches unit results in, or
+// "off" to analyze every unit afresh.
+const cacheVariable = "GOHAWK_CACHE"
+
+// runnerCacheDir returns where unit results are cached, or "" for nowhere.
+func runnerCacheDir(getenv func(string) string, tracing bool) string {
+	switch dir := getenv(cacheVariable); {
+	case tracing || dir == "off":
+		return ""
+	case dir != "":
+		return dir
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(base, "gohawk", "units")
 }
 
 // parseToolArguments parses the arguments as go vet and its tool would
@@ -110,6 +137,9 @@ func parseToolArguments(arguments []string, analyzers []*analysis.Analyzer) (too
 	if err := flags.Parse(arguments); err != nil {
 		return toolRequest{}, err
 	}
+	flags.Visit(func(set *flag.Flag) {
+		request.tracing = request.tracing || strings.HasPrefix(set.Name, "gohawk-trace") || set.Name == "gohawk-timing-file"
+	})
 	request.patterns = flags.Args()
 	if len(request.patterns) == 0 {
 		request.patterns = []string{"."}

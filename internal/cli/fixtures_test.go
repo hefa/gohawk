@@ -282,7 +282,7 @@ func runCommand(t *testing.T, directory, name string, arguments ...string) (stri
 	t.Helper()
 	command := exec.CommandContext(t.Context(), name, arguments...)
 	command.Dir = directory
-	command.Env = append(os.Environ(), "GOWORK=off")
+	command.Env = append(os.Environ(), "GOWORK=off", cacheVariable+"=off")
 	output, err := command.CombinedOutput()
 	if err == nil {
 		return string(output), 0

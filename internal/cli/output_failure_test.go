@@ -51,7 +51,7 @@ func TestCLIPartialPackageFailure(t *testing.T) {
 		writeTestFile(t, filepath.Join(directory, "good", "good.go"), source)
 		command := exec.CommandContext(t.Context(), binary, "-json", "-enable=concurrentcapture", "./...")
 		command.Dir = directory
-		command.Env = append(os.Environ(), "GOWORK=off")
+		command.Env = append(os.Environ(), "GOWORK=off", cacheVariable+"=off")
 		var output, errorOutput bytes.Buffer
 		command.Stdout, command.Stderr = &output, &errorOutput
 		err := command.Run()

@@ -22,6 +22,17 @@ import (
 type unitResult struct {
 	published []publishedFact
 	reports   map[string]any
+	// lazyFacts, for a result read from the cache, decodes its published
+	// facts when an importer first needs them.
+	lazyFacts func() []publishedFact
+}
+
+// facts returns the facts the unit published.
+func (result *unitResult) facts() []publishedFact {
+	if result.lazyFacts != nil {
+		return result.lazyFacts()
+	}
+	return result.published
 }
 
 // analyzeUnit type-checks the unit against its imports' export data and
@@ -29,49 +40,12 @@ type unitResult struct {
 // analyze only for its facts, runs only the analyzers that produce facts
 // and those they require, and reports nothing.
 func (run *session) analyzeUnit(target *unit, published [][]publishedFact) (unitResult, error) {
-	var files []*ast.File
-	for _, name := range target.CompiledGoFiles {
-		if !filepath.IsAbs(name) {
-			name = filepath.Join(target.Dir, name)
-		}
-		file, err := parser.ParseFile(run.fset, name, nil, parser.ParseComments|parser.SkipObjectResolution)
-		if err != nil {
-			return unitResult{}, err
-		}
-		files = append(files, file)
-	}
-	defer run.forgetFiles(files)
-	info := &types.Info{
-		Types:        map[ast.Expr]types.TypeAndValue{},
-		Defs:         map[*ast.Ident]types.Object{},
-		Uses:         map[*ast.Ident]types.Object{},
-		Implicits:    map[ast.Node]types.Object{},
-		Instances:    map[*ast.Ident]types.Instance{},
-		Scopes:       map[ast.Node]*types.Scope{},
-		Selections:   map[*ast.SelectorExpr]*types.Selection{},
-		FileVersions: map[*ast.File]string{},
-	}
-	var typeErrors []types.Error
-	config := &types.Config{
-		Importer: run.importer.forUnit(target),
-		Sizes:    types.SizesFor("gc", runtime.GOARCH),
-		Error: func(err error) {
-			if typed, ok := errors.AsType[types.Error](err); ok {
-				typeErrors = append(typeErrors, typed)
-			}
-		},
-	}
-	var analysisModule *analysis.Module
-	if target.Module != nil {
-		if target.Module.GoVersion != "" {
-			config.GoVersion = "go" + target.Module.GoVersion
-		}
-		analysisModule = &analysis.Module{Path: target.Module.Path, Version: target.Module.Version, GoVersion: target.Module.GoVersion}
-	}
-	pkg, err := config.Check(target.path(), run.fset, files, info)
+	checked, err := run.checkUnit(target)
 	if err != nil {
 		return unitResult{}, err
 	}
+	defer run.forgetFiles(checked.files)
+	files, pkg, info, config, typeErrors, analysisModule := checked.files, checked.pkg, checked.info, checked.config, checked.typeErrors, checked.module
 	store := newFactStore(pkg, published)
 	analyzers := run.analyzers
 	if target.DepOnly {
@@ -123,6 +97,68 @@ func (run *session) analyzeUnit(target *unit, published [][]publishedFact) (unit
 		run.release(built.Pkg.Prog)
 	}
 	return result, nil
+}
+
+// A checkedUnit is a unit parsed and type-checked against its imports.
+type checkedUnit struct {
+	files      []*ast.File
+	pkg        *types.Package
+	info       *types.Info
+	config     *types.Config
+	typeErrors []types.Error
+	module     *analysis.Module
+}
+
+// checkUnit parses the unit's files and type-checks them.
+func (run *session) checkUnit(target *unit) (checkedUnit, error) {
+	if target.Error != nil {
+		return checkedUnit{}, errors.New(target.Error.Err)
+	}
+	var files []*ast.File
+	for _, name := range target.CompiledGoFiles {
+		if !filepath.IsAbs(name) {
+			name = filepath.Join(target.Dir, name)
+		}
+		file, err := parser.ParseFile(run.fset, name, nil, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			run.forgetFiles(files)
+			return checkedUnit{}, err
+		}
+		files = append(files, file)
+	}
+	info := &types.Info{
+		Types:        map[ast.Expr]types.TypeAndValue{},
+		Defs:         map[*ast.Ident]types.Object{},
+		Uses:         map[*ast.Ident]types.Object{},
+		Implicits:    map[ast.Node]types.Object{},
+		Instances:    map[*ast.Ident]types.Instance{},
+		Scopes:       map[ast.Node]*types.Scope{},
+		Selections:   map[*ast.SelectorExpr]*types.Selection{},
+		FileVersions: map[*ast.File]string{},
+	}
+	var typeErrors []types.Error
+	config := &types.Config{
+		Importer: run.importer.forUnit(target),
+		Sizes:    types.SizesFor("gc", runtime.GOARCH),
+		Error: func(err error) {
+			if typed, ok := errors.AsType[types.Error](err); ok {
+				typeErrors = append(typeErrors, typed)
+			}
+		},
+	}
+	var analysisModule *analysis.Module
+	if target.Module != nil {
+		if target.Module.GoVersion != "" {
+			config.GoVersion = "go" + target.Module.GoVersion
+		}
+		analysisModule = &analysis.Module{Path: target.Module.Path, Version: target.Module.Version, GoVersion: target.Module.GoVersion}
+	}
+	pkg, err := config.Check(target.path(), run.fset, files, info)
+	if err != nil {
+		run.forgetFiles(files)
+		return checkedUnit{}, err
+	}
+	return checkedUnit{files: files, pkg: pkg, info: info, config: config, typeErrors: typeErrors, module: analysisModule}, nil
 }
 
 // forgetFiles drops the unit's files from the shared file set once nothing

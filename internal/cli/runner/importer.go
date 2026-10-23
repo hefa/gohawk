@@ -45,6 +45,17 @@ func (imp *importer) forUnit(from *unit) types.Importer {
 	})
 }
 
+// load decodes the package the unit ID names into the world of a unit in
+// world. An error is left for the importing unit's type check to report.
+func (imp *importer) load(world, id string) {
+	if dependency := imp.units[id]; dependency == nil || dependency.path() == "unsafe" {
+		return
+	}
+	imp.mu.Lock()
+	defer imp.mu.Unlock()
+	_, _ = imp.loadLocked(world, id)
+}
+
 // loadLocked returns the package the unit ID names, decoding it into its
 // world first if need be. gcexportdata reads into the world's map, which
 // is not safe for concurrent use; the caller holds imp.mu.

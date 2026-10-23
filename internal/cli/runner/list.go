@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -76,8 +75,10 @@ func listUnits(ctx context.Context, dir string, buildFlags, patterns []string) (
 	command.Dir = dir
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
+	// A package that does not compile still lists, with its error; go list
+	// then exits with a failure, but every other package can be analyzed.
 	output, err := command.Output()
-	if err != nil {
+	if err != nil && len(bytes.TrimSpace(output)) == 0 {
 		return nil, fmt.Errorf("go list: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	var units []*unit
@@ -88,15 +89,6 @@ func listUnits(ctx context.Context, dir string, buildFlags, patterns []string) (
 			return nil, fmt.Errorf("go list output: %w", err)
 		}
 		units = append(units, listed)
-	}
-	var failures []string
-	for _, listed := range units {
-		if listed.Error != nil && listed.analyzed() {
-			failures = append(failures, listed.Error.Err)
-		}
-	}
-	if len(failures) > 0 {
-		return nil, errors.New(strings.Join(failures, "\n"))
 	}
 	return units, nil
 }

@@ -38,6 +38,8 @@ type Options struct {
 	Release func(*ssa.Program)
 	// Jobs bounds how many units are analyzed at once; zero means GOMAXPROCS.
 	Jobs int
+	// CacheDir holds the results of earlier runs; empty disables the cache.
+	CacheDir string
 }
 
 // A session is one run's shared state.
@@ -48,6 +50,16 @@ type session struct {
 	factAnalyzers []*analysis.Analyzer
 	factsOnlyRun  map[*analysis.Analyzer]func(*analysis.Pass) (any, error)
 	release       func(*ssa.Program)
+	// results caches unit results across runs, by keys; nil disables it.
+	// cached holds this run's hits.
+	results *cache
+	keys    map[string][]byte
+	cached  map[string]unitResult
+	// slots bounds the units analyzed at once.
+	slots chan struct{}
+	// remaining counts each test's units not yet done.
+	worlds    sync.Mutex
+	remaining map[string]int
 }
 
 // Run analyzes the packages and returns the findings in the JSON go vet
@@ -67,65 +79,143 @@ func Run(ctx context.Context, options Options) ([]byte, []error) {
 	run := &session{
 		fset: fset, importer: newImporter(fset, byID), analyzers: options.Analyzers,
 		factAnalyzers: factAnalyzers(options.Analyzers), factsOnlyRun: options.FactsOnlyRun, release: options.Release,
+		results: openCache(options.CacheDir, options.Analyzers),
 	}
 	if run.release == nil {
 		run.release = func(*ssa.Program) {}
 	}
+	run.keys = run.unitKeys(units)
 	jobs := options.Jobs
 	if jobs <= 0 {
 		jobs = runtime.GOMAXPROCS(0)
 	}
-	// A test's world is released once all of its units are done.
-	remaining := map[string]int{}
+	run.slots = make(chan struct{}, jobs)
+	run.remaining = map[string]int{}
 	for _, listed := range units {
 		if listed.ForTest != "" {
-			remaining[listed.ForTest]++
+			run.remaining[listed.ForTest]++
 		}
-	}
-	type outcome struct {
-		result unitResult
-		err    error
-		done   chan struct{}
 	}
 	outcomes := make(map[string]*outcome, len(units))
 	for _, listed := range units {
 		outcomes[listed.id()] = &outcome{done: make(chan struct{})}
 	}
-	var worlds sync.Mutex
-	slots := make(chan struct{}, jobs)
+	run.cached = run.cachedResults(units)
+	run.preload(units)
 	var wait sync.WaitGroup
 	for _, listed := range units {
-		current := outcomes[listed.id()]
-		wait.Go(func() {
-			defer close(current.done)
-			defer func() {
-				if listed.ForTest == "" {
-					return
-				}
-				worlds.Lock()
-				remaining[listed.ForTest]--
-				last := remaining[listed.ForTest] == 0
-				worlds.Unlock()
-				if last {
-					run.importer.release(listed.ForTest)
-				}
-			}()
-			var published [][]publishedFact
-			for _, id := range listed.Imports {
-				if imported, ok := outcomes[id]; ok {
-					<-imported.done
-					published = append(published, imported.result.published)
-				}
-			}
-			if !listed.analyzed() || ctx.Err() != nil {
-				return
-			}
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			current.result, current.err = run.analyzeUnit(listed, published)
-		})
+		wait.Go(func() { run.schedule(ctx, listed, outcomes) })
 	}
 	wait.Wait()
+	return collect(units, outcomes)
+}
+
+// An outcome is a unit's result once done is closed.
+type outcome struct {
+	result unitResult
+	err    error
+	done   chan struct{}
+}
+
+// unitKeys returns every unit's cache key, or nil when the cache is off or
+// a unit's files cannot be read; the run then analyzes every unit.
+func (run *session) unitKeys(units []*unit) map[string][]byte {
+	if run.results == nil {
+		return nil
+	}
+	keys := map[string][]byte{}
+	for _, listed := range units {
+		key, err := run.results.key(listed, keys)
+		if err != nil {
+			run.results = nil
+			return nil
+		}
+		keys[listed.id()] = key
+	}
+	return keys
+}
+
+// schedule analyzes the unit once its imports are done, from the cache when
+// an earlier run left its result, and within the run's job limit otherwise.
+func (run *session) schedule(ctx context.Context, listed *unit, outcomes map[string]*outcome) {
+	current := outcomes[listed.id()]
+	defer close(current.done)
+	defer run.leaveWorld(listed.ForTest)
+	var published [][]publishedFact
+	for _, id := range listed.Imports {
+		if imported, ok := outcomes[id]; ok {
+			<-imported.done
+			published = append(published, imported.result.facts())
+		}
+	}
+	if !listed.analyzed() || ctx.Err() != nil {
+		return
+	}
+	if cached, ok := run.cached[listed.id()]; ok {
+		current.result = cached
+		return
+	}
+	run.slots <- struct{}{}
+	defer func() { <-run.slots }()
+	current.result, current.err = run.analyzeUnit(listed, published)
+	if run.results != nil && current.err == nil {
+		run.results.save(run.keys[listed.id()], current.result)
+	}
+}
+
+// cachedResults returns the results an earlier run left for the units.
+func (run *session) cachedResults(units []*unit) map[string]unitResult {
+	cached := map[string]unitResult{}
+	if run.results == nil {
+		return cached
+	}
+	for _, listed := range units {
+		if !listed.analyzed() {
+			continue
+		}
+		if result, ok := run.results.load(run.keys[listed.id()]); ok {
+			cached[listed.id()] = result
+		}
+	}
+	return cached
+}
+
+// preload decodes the imports of every unit to be analyzed, one package at
+// a time in dependency order, before any unit is analyzed. Decoding a
+// package's export data can add objects to the scope of another package it
+// refers to, and type checks and fact lookups read those scopes; once every
+// package is decoded, units only read them and can run at once.
+func (run *session) preload(units []*unit) {
+	for _, listed := range units {
+		if !listed.analyzed() || listed.Error != nil {
+			continue
+		}
+		if _, ok := run.cached[listed.id()]; ok {
+			continue
+		}
+		for _, id := range listed.Imports {
+			run.importer.load(listed.ForTest, id)
+		}
+	}
+}
+
+// leaveWorld releases a test's world once its last unit is done.
+func (run *session) leaveWorld(world string) {
+	if world == "" {
+		return
+	}
+	run.worlds.Lock()
+	run.remaining[world]--
+	last := run.remaining[world] == 0
+	run.worlds.Unlock()
+	if last {
+		run.importer.release(world)
+	}
+}
+
+// collect renders the units' findings in go list order and gathers their
+// errors.
+func collect(units []*unit, outcomes map[string]*outcome) ([]byte, []error) {
 	var output bytes.Buffer
 	var failures []error
 	for _, listed := range units {
