@@ -66,6 +66,8 @@ type region struct {
 	// order consumers ask them; order caches the region's ordering key.
 	serial int
 	order  string
+	// whole is the read-only set holding just this object, for singleton.
+	whole pointees
 }
 
 // versionStamp identifies the last unfollowed write that may have changed a

@@ -174,6 +174,14 @@ func (graph *regionGraph) contentSole(state *regionState, target slot) (slot, bo
 // singleton returns the graph's read-only set holding exactly member, with
 // its stale bit.
 func (graph *regionGraph) singleton(member slot, stale bool) pointees {
+	// The whole object, the usual member, keeps its set on the region; a
+	// per-graph map of every singleton grew with every graph.
+	if member.path == "" && !stale {
+		if member.region.whole == nil {
+			member.region.whole = pointees{member: false}
+		}
+		return member.region.whole
+	}
 	key := singletonKey{member: member, stale: stale}
 	set, ok := graph.singletons[key]
 	if !ok {
