@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"go/token"
 	"go/types"
+	"slices"
 
 	"github.com/kojah/gohawk/internal/engine/heapmodel"
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
@@ -53,13 +54,13 @@ func ProveReturnedOwnershipWithin(returned *ssa.Return, value ssa.Value, summari
 // ownershipSearch carries the cycle guard and the summary hook through the
 // walk that asks whether a returned value holds another value.
 type ownershipSearch struct {
-	seen       map[ownershipPair]bool
+	seen       visitedPairs
 	summarized ReturnsOwner
 	budget     *proofs.SearchBudget
 }
 
 func newOwnershipSearch(summarized ReturnsOwner) *ownershipSearch {
-	return &ownershipSearch{seen: map[ownershipPair]bool{}, summarized: summarized}
+	return &ownershipSearch{summarized: summarized}
 }
 
 func (search *ownershipSearch) exhausted() bool {
@@ -73,6 +74,39 @@ func (search *ownershipSearch) aliases(left, right ssa.Value) bool {
 type ownershipPair struct {
 	aggregate ssa.Value
 	value     ssa.Value
+}
+
+// visitedPairs is an ownership search's cycle guard: a few pairs inline,
+// then a map. A map per search was most of what the search allocated, and
+// most searches visit few pairs.
+type visitedPairs struct {
+	inline [4]ownershipPair
+	count  int
+	spill  map[ownershipPair]bool
+}
+
+func (set *visitedPairs) has(pair ownershipPair) bool {
+	if set.spill != nil {
+		return set.spill[pair]
+	}
+	return slices.Contains(set.inline[:set.count], pair)
+}
+
+func (set *visitedPairs) add(pair ownershipPair) {
+	switch {
+	case set.spill != nil:
+		set.spill[pair] = true
+	case slices.Contains(set.inline[:set.count], pair):
+	case set.count < len(set.inline):
+		set.inline[set.count] = pair
+		set.count++
+	default:
+		set.spill = make(map[ownershipPair]bool, 2*len(set.inline))
+		for _, seen := range set.inline[:set.count] {
+			set.spill[seen] = true
+		}
+		set.spill[pair] = true
+	}
 }
 
 func (search *ownershipSearch) returnedValueOwnsValue(returned *ssa.Return, value ssa.Value) bool {
@@ -95,7 +129,7 @@ func (search *ownershipSearch) aggregateStoresValue(aggregate, value ssa.Value) 
 		return false
 	}
 	pair := ownershipPair{aggregate: aggregate, value: value}
-	if aggregate == nil || search.seen[pair] {
+	if aggregate == nil || search.seen.has(pair) {
 		return false
 	}
 	// Alias evidence belongs at this entry, so returns, loads, stores and
@@ -105,7 +139,7 @@ func (search *ownershipSearch) aggregateStoresValue(aggregate, value ssa.Value) 
 	if search.aliases(aggregate, value) {
 		return true
 	}
-	search.seen[pair] = true
+	search.seen.add(pair)
 	// A constructor with a fast path returns the argument itself once it is
 	// already the type it would wrap, as bufio.NewReaderSize does with
 	// rd.(*Reader). The assertion selects the same object, so the caller
