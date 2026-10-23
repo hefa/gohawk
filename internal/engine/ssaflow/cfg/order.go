@@ -109,7 +109,8 @@ func BlockInCycleWithin(start *ssa.BasicBlock, budget *proofs.SearchBudget) bool
 // initial block or only its successors can count. Clone the seeds because
 // queue growth must not overwrite an SSA block's successor backing array.
 func blockReachableFromWithin(seeds []*ssa.BasicBlock, target *ssa.BasicBlock, budget *proofs.SearchBudget) bool {
-	seen := map[*ssa.BasicBlock]bool{}
+	var stack [4]uint64
+	seen := newBlockSet(target, stack[:])
 	queue := slices.Clone(seeds)
 	head := 0
 	for head < len(queue) {
@@ -126,10 +127,9 @@ func blockReachableFromWithin(seeds []*ssa.BasicBlock, target *ssa.BasicBlock, b
 		if block == target {
 			return true
 		}
-		if seen[block] {
+		if !seen.add(block) {
 			continue
 		}
-		seen[block] = true
 		for _, successor := range block.Succs {
 			if !budget.Spend() {
 				return false
@@ -142,4 +142,47 @@ func blockReachableFromWithin(seeds []*ssa.BasicBlock, target *ssa.BasicBlock, b
 		}
 	}
 	return false
+}
+
+// blockSet is a visited set of basic blocks. Blocks of one function are
+// numbered densely, so the blocks of target's function are bits, on the
+// caller's stack when they fit; a map per query was most of what reachability
+// allocated. A block of another function falls back to a map.
+type blockSet struct {
+	function *ssa.Function
+	bits     []uint64
+	other    map[*ssa.BasicBlock]bool
+}
+
+func newBlockSet(target *ssa.BasicBlock, stack []uint64) blockSet {
+	set := blockSet{bits: stack}
+	if target != nil && target.Parent() != nil {
+		set.function = target.Parent()
+		if words := (len(set.function.Blocks) + 63) / 64; words > len(stack) {
+			set.bits = make([]uint64, words)
+		} else {
+			clear(stack)
+		}
+	}
+	return set
+}
+
+// add records block and reports whether it was not already present.
+func (set *blockSet) add(block *ssa.BasicBlock) bool {
+	if block.Parent() == set.function && set.function != nil && block.Index < 64*len(set.bits) {
+		word, bit := block.Index/64, uint64(1)<<(block.Index%64)
+		if set.bits[word]&bit != 0 {
+			return false
+		}
+		set.bits[word] |= bit
+		return true
+	}
+	if set.other[block] {
+		return false
+	}
+	if set.other == nil {
+		set.other = map[*ssa.BasicBlock]bool{}
+	}
+	set.other[block] = true
+	return true
 }
