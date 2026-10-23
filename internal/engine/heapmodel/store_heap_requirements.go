@@ -135,8 +135,8 @@ func compareRequirementCandidates(left, right requirementCandidate) int {
 	if left.requirement.Method != right.requirement.Method {
 		return strings.Compare(left.requirement.Method, right.requirement.Method)
 	}
-	if left.key.slot.region.serial != right.key.slot.region.serial {
-		return cmp.Compare(left.key.slot.region.serial, right.key.slot.region.serial)
+	if left.key.slot.region != right.key.slot.region {
+		return compareRegions(left.key.slot.region, right.key.slot.region)
 	}
 	return strings.Compare(left.key.slot.path, right.key.slot.path)
 }

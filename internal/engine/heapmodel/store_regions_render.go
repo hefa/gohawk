@@ -1,8 +1,11 @@
 package heapmodel
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
@@ -200,4 +203,74 @@ func regionName(object *region) string {
 		return "closure:" + object.origin.Name()
 	}
 	return "?"
+}
+
+// compareRegions orders regions by what they are rather than when they were
+// created. A graph interns regions during its queries as well as during the
+// fixpoint, and queries come in the order its consumers ask them, so a
+// creation-order serial differed from run to run. Every ordered walk over
+// slots, and with it the numbering of fresh objects in a projection and
+// which slots a projection keeps within its bound, then did too. Distinct
+// regions have distinct keys; serial breaks a tie only for an origin with no
+// stable name.
+func compareRegions(left, right *region) int {
+	if left == right {
+		return 0
+	}
+	if order := strings.Compare(left.orderKey(), right.orderKey()); order != 0 {
+		return order
+	}
+	return cmp.Compare(left.serial, right.serial)
+}
+
+// orderKey is the region's identity as a string: its kind, origin, label,
+// source slot and stamp, the fields that intern it. It is computed once.
+func (object *region) orderKey() string {
+	if object.order != "" {
+		return object.order
+	}
+	var key strings.Builder
+	key.WriteString(strconv.Itoa(int(object.kind)))
+	key.WriteString("|")
+	key.WriteString(valueOrderKey(object.origin))
+	key.WriteString("|")
+	key.WriteString(object.label)
+	key.WriteString("|")
+	if object.source.region != nil {
+		key.WriteString("(")
+		key.WriteString(object.source.region.orderKey())
+		key.WriteString(")")
+		key.WriteString(object.source.path)
+	}
+	key.WriteString("|")
+	key.WriteString(strconv.Itoa(object.stamp.epoch))
+	key.WriteString(".")
+	key.WriteString(strconv.Itoa(object.stamp.step))
+	object.order = key.String()
+	return object.order
+}
+
+// valueOrderKey names an SSA value by its place in the program: an
+// instruction by function, block and position in the block, a parameter or
+// free variable by index, a global by package and name.
+func valueOrderKey(value ssa.Value) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case *ssa.Parameter:
+		return "param:" + typed.Parent().String() + "#" + strconv.Itoa(slices.Index(typed.Parent().Params, typed))
+	case *ssa.FreeVar:
+		return "free:" + typed.Parent().String() + "#" + strconv.Itoa(slices.Index(typed.Parent().FreeVars, typed))
+	case *ssa.Global:
+		return "global:" + typed.Pkg.Pkg.Path() + "." + typed.Name()
+	case *ssa.Function:
+		return "func:" + typed.String()
+	case ssa.Instruction:
+		block := typed.Block()
+		if block == nil {
+			return "value:" + value.String()
+		}
+		return "instr:" + block.Parent().String() + "#" + strconv.Itoa(block.Index) + "." + strconv.Itoa(slices.Index(block.Instrs, typed))
+	}
+	return "value:" + value.String()
 }

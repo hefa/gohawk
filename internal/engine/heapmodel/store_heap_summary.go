@@ -378,7 +378,7 @@ func orderedSlots[Value any](entries map[slot]Value) []slot {
 	}
 	slices.SortFunc(slots, func(left, right slot) int {
 		if left.region != right.region {
-			return cmp.Compare(left.region.serial, right.region.serial)
+			return compareRegions(left.region, right.region)
 		}
 		return strings.Compare(left.path, right.path)
 	})

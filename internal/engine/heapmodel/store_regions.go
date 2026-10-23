@@ -61,10 +61,11 @@ type region struct {
 	// label distinguishes the objects one call created, by their origin
 	// in the callee's summary.
 	label string
-	// serial is the region's creation order within its graph, the tie
-	// breaker that keeps every ordered walk over slots the same run to
-	// run when two regions share a name.
+	// serial is the region's creation order within its graph. It breaks a
+	// tie in compareRegions only, because queries intern regions in the
+	// order consumers ask them; order caches the region's ordering key.
 	serial int
+	order  string
 }
 
 // versionStamp identifies the last unfollowed write that may have changed a
