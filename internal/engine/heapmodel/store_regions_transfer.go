@@ -86,6 +86,7 @@ func (graph *regionGraph) pointees(value ssa.Value) pointees {
 	if value == nil {
 		return pointeesOf(graph.unkR.at(""), false)
 	}
+	graph.noteRead(value)
 	if set, ok := graph.values[value]; ok {
 		return set
 	}
@@ -135,9 +136,14 @@ func (graph *regionGraph) setValue(value ssa.Value, set pointees) {
 	// collapses, and a loop-free body would need a second round only to
 	// apply it.
 	if existing, ok := graph.values[value]; ok {
+		before := existing.version()
 		existing.union(set)
+		if existing.version() != before {
+			graph.markChanged(value)
+		}
 	} else {
 		graph.values[value] = set.clone()
+		graph.markChanged(value)
 	}
 	graph.boundValue(value)
 }
@@ -215,6 +221,7 @@ type sliceView struct {
 // unrecorded slice has unknown bounds; a zero-length array is still known.
 // Callers decide whether the window and their selected index are usable.
 func (graph *regionGraph) view(value ssa.Value) (sliceView, bool) {
+	graph.noteRead(value)
 	if view, known := graph.views[value]; known {
 		return view, true
 	}
@@ -248,7 +255,11 @@ func (graph *regionGraph) slice(sliced *ssa.Slice) {
 	if !lowOK || !highOK || !maxOK || low < 0 || low > high || high > max || max > view.capacity {
 		return
 	}
-	graph.views[sliced] = sliceView{offset: view.offset + low, size: high - low, capacity: max - low}
+	window := sliceView{offset: view.offset + low, size: high - low, capacity: max - low}
+	if old, ok := graph.views[sliced]; !ok || old != window {
+		graph.views[sliced] = window
+		graph.markChanged(sliced)
+	}
 }
 
 // load returns what the slots hold. A whole-aggregate load makes a snapshot
@@ -336,6 +347,7 @@ func (graph *regionGraph) extract(extract *ssa.Extract) {
 		return
 	}
 	if call, ok := extract.Tuple.(*ssa.Call); ok {
+		graph.noteRead(call)
 		if results := graph.callResults[call]; extract.Index < len(results) && !results[extract.Index].isNil() {
 			graph.setValue(extract, results[extract.Index])
 			return

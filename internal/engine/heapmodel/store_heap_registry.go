@@ -2,8 +2,10 @@ package heapmodel
 
 import (
 	"slices"
+	"strings"
 	"sync"
 
+	"github.com/kojah/gohawk/internal/engine/heapmodel/heapsummary"
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
 	ssacall "github.com/kojah/gohawk/internal/engine/ssaflow/calls"
 	"golang.org/x/tools/go/ssa"
@@ -309,3 +311,68 @@ func functionPackage(function *ssa.Function) *ssa.Package {
 	}
 	return nil
 }
+
+// SummaryPaths bounds the paths a projected summary names beneath a root.
+const SummaryPaths = 3
+
+// summaryPathTooDeep counts serialized steps without materializing them.
+// A nonempty path has one more step than separators; an empty path remains
+// within the positive bound. Empty components count just as SplitAccessPath
+// counts them, so this preserves the publication boundary for every string.
+func summaryPathTooDeep(path string) bool {
+	return strings.Count(path, "/") >= SummaryPaths
+}
+
+// SummarySlots bounds the slots projected per root before truncation.
+const SummarySlots = 16
+
+// SummaryVersion identifies the heap edge semantics in exported facts.
+// Version 2 distinguishes an address beneath a parameter from that slot's content.
+const SummaryVersion = 2
+
+// The summary vocabulary lives in heapsummary; heapmodel projects and applies
+// summaries, and keeps these names as its public API.
+type (
+	HeapRootKind        = heapsummary.HeapRootKind
+	HeapRoot            = heapsummary.HeapRoot
+	HeapSlot            = heapsummary.HeapSlot
+	HeapTargetKind      = heapsummary.HeapTargetKind
+	HeapTarget          = heapsummary.HeapTarget
+	HeapEdge            = heapsummary.HeapEdge
+	HeapEscape          = heapsummary.HeapEscape
+	HeapEffect          = heapsummary.HeapEffect
+	HeapSummary         = heapsummary.HeapSummary
+	HeapHold            = heapsummary.HeapHold
+	HeapRequirementKind = heapsummary.HeapRequirementKind
+	HeapRequirement     = heapsummary.HeapRequirement
+)
+
+const (
+	HeapParameter      = heapsummary.HeapParameter
+	HeapResult         = heapsummary.HeapResult
+	HeapGlobal         = heapsummary.HeapGlobal
+	HeapFreeVar        = heapsummary.HeapFreeVar
+	HeapTargetSlot     = heapsummary.HeapTargetSlot
+	HeapTargetFresh    = heapsummary.HeapTargetFresh
+	HeapTargetNil      = heapsummary.HeapTargetNil
+	HeapTargetUnknown  = heapsummary.HeapTargetUnknown
+	HeapTargetAddress  = heapsummary.HeapTargetAddress
+	HeapEscapedGlobal  = heapsummary.HeapEscapedGlobal
+	HeapEscapedField   = heapsummary.HeapEscapedField
+	HeapEscapedCall    = heapsummary.HeapEscapedCall
+	HeapEscapedAsync   = heapsummary.HeapEscapedAsync
+	HeapEscapedSend    = heapsummary.HeapEscapedSend
+	HeapRequiresMethod = heapsummary.HeapRequiresMethod
+	HeapRequiresNonNil = heapsummary.HeapRequiresNonNil
+)
+
+// SortedSlots returns the canonical order of a set of projected slots.
+func SortedSlots(set map[HeapSlot]bool) []HeapSlot { return heapsummary.SortedSlots(set) }
+
+func compareSlots(left, right HeapSlot) int { return heapsummary.CompareSlots(left, right) }
+
+func compareEdges(left, right HeapEdge) int { return heapsummary.CompareEdges(left, right) }
+
+func publishedEdgeOrder(left, right HeapEdge) int { return heapsummary.PublishedEdgeOrder(left, right) }
+
+func compareEffects(left, right HeapEffect) int { return heapsummary.CompareEffects(left, right) }

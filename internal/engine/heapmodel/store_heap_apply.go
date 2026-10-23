@@ -304,7 +304,10 @@ func (substitution *heapSubstitution) results(call *ssa.Call) {
 			set = pointeesOf(substitution.freshObject("result:"+strconv.Itoa(index)).at(""), false)
 		}
 		if count == 1 {
-			substitution.graph.values[call] = set.clone()
+			if old, ok := substitution.graph.values[call]; !ok || !old.equal(set) {
+				substitution.graph.values[call] = set.clone()
+				substitution.graph.markChanged(call)
+			}
 			return
 		}
 		if extract := ssacall.CallResult(call, index); extract != nil {
@@ -320,6 +323,9 @@ func (substitution *heapSubstitution) results(call *ssa.Call) {
 		if substitution.graph.callResults[call] == nil {
 			substitution.graph.callResults[call] = make([]pointees, count)
 		}
-		substitution.graph.callResults[call][index] = set.clone()
+		if old := substitution.graph.callResults[call][index]; old.isNil() || !old.equal(set) {
+			substitution.graph.callResults[call][index] = set.clone()
+			substitution.graph.markChanged(call)
+		}
 	}
 }

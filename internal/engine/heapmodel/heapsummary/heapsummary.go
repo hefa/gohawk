@@ -1,10 +1,10 @@
-// Package heapmodel owns bounded storage queries, the per-function points-to
-// graph, heap summaries, and call-site substitution. Storage combines exact
-// reaching-write and graph evidence; unknown never means empty or disjoint.
-// It uses lower-level SSA mechanics from ssaflow. Completion, resource, and
-// synchronization models consume this evidence without redefining identity;
-// analyzers decide what the evidence proves for a check.
-package heapmodel
+// Package heapsummary is the vocabulary of heap summaries: what a caller can
+// name of a callee's heap (parameters, results, globals and captured
+// variables), the edges, escapes, holds and requirements a summary states
+// about them, and their canonical order. heapmodel projects and applies
+// summaries; this package only describes them, so the published facts and
+// every consumer share one definition.
+package heapsummary
 
 import (
 	"cmp"
@@ -13,36 +13,18 @@ import (
 	"strings"
 )
 
-// SummaryPaths bounds the paths a projected summary names beneath a root.
-const SummaryPaths = 3
-
-// summaryPathTooDeep counts serialized steps without materializing them.
-// A nonempty path has one more step than separators; an empty path remains
-// within the positive bound. Empty components count just as SplitAccessPath
-// counts them, so this preserves the publication boundary for every string.
-func summaryPathTooDeep(path string) bool {
-	return strings.Count(path, "/") >= SummaryPaths
-}
-
-// SummarySlots bounds the slots projected per root before truncation.
-const SummarySlots = 16
-
-// SummaryVersion identifies the heap edge semantics in exported facts.
-// Version 2 distinguishes an address beneath a parameter from that slot's content.
-const SummaryVersion = 2
-
 // SortedSlots returns the canonical order of a set of projected slots.
 func SortedSlots(set map[HeapSlot]bool) []HeapSlot {
 	slots := make([]HeapSlot, 0, len(set))
 	for at := range set {
 		slots = append(slots, at)
 	}
-	slices.SortFunc(slots, compareSlots)
+	slices.SortFunc(slots, CompareSlots)
 	return slots
 }
 
-// compareSlots orders summary slots by root identity and access path.
-func compareSlots(left, right HeapSlot) int {
+// CompareSlots orders summary slots by root identity and access path.
+func CompareSlots(left, right HeapSlot) int {
 	if left.Root != right.Root {
 		if left.Root.Kind != right.Root.Kind {
 			return cmp.Compare(left.Root.Kind, right.Root.Kind)
@@ -58,27 +40,27 @@ func compareSlots(left, right HeapSlot) int {
 	return strings.Compare(left.Path, right.Path)
 }
 
-// Preserve the published less relation: Object and Must do not break ties.
-func compareEdges(left, right HeapEdge) int {
+// CompareEdges preserves the published less relation: Object and Must do not break ties.
+func CompareEdges(left, right HeapEdge) int {
 	if left.From != right.From {
-		return compareSlots(left.From, right.From)
+		return CompareSlots(left.From, right.From)
 	}
 	if left.To.Kind != right.To.Kind {
 		return cmp.Compare(left.To.Kind, right.To.Kind)
 	}
 	if left.To.Slot != right.To.Slot {
-		return compareSlots(left.To.Slot, right.To.Slot)
+		return CompareSlots(left.To.Slot, right.To.Slot)
 	}
 	return strings.Compare(left.To.Origin, right.To.Origin)
 }
 
-// publishedEdgeOrder refines compareEdges into a total order. Edges are
-// gathered from maps, so edges that tie under compareEdges, differing only in
+// PublishedEdgeOrder refines CompareEdges into a total order. Edges are
+// gathered from maps, so edges that tie under CompareEdges, differing only in
 // Object or Must, would otherwise be published in a different order on every
 // run, and the fact bytes with them. The refinement keeps the list sorted
-// under compareEdges.
-func publishedEdgeOrder(left, right HeapEdge) int {
-	if order := compareEdges(left, right); order != 0 {
+// under CompareEdges.
+func PublishedEdgeOrder(left, right HeapEdge) int {
+	if order := CompareEdges(left, right); order != 0 {
 		return order
 	}
 	if left.To.Object != right.To.Object {
@@ -93,10 +75,11 @@ func publishedEdgeOrder(left, right HeapEdge) int {
 	return -1
 }
 
-// Every is proof metadata, not part of the published effect ordering.
-func compareEffects(left, right HeapEffect) int {
+// CompareEffects orders effects; Every is proof metadata, not part of the
+// published effect ordering.
+func CompareEffects(left, right HeapEffect) int {
 	if left.Slot != right.Slot {
-		return compareSlots(left.Slot, right.Slot)
+		return CompareSlots(left.Slot, right.Slot)
 	}
 	if left.Escape != right.Escape {
 		return cmp.Compare(left.Escape, right.Escape)

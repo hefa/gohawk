@@ -2,7 +2,6 @@ package heapmodel
 
 import (
 	"iter"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -145,6 +144,9 @@ func pointeesOf(member slot, stale bool) pointees {
 }
 
 func (set pointees) isNil() bool { return set.s == nil }
+
+// version changes whenever the set does.
+func (set pointees) version() uint32 { return set.s.Version() }
 
 func (set pointees) Len() int { return set.s.Len() }
 
@@ -328,6 +330,9 @@ type regionGraph struct {
 	// looked up, read before the lookup, so the cache can tell when a later
 	// registration made the graph stale.
 	consulted map[*ssa.Function]int
+	// runs lets a fixpoint round skip a block that would repeat its last
+	// run; it is nil outside a build.
+	runs *blockRuns
 	// escapeOrigins records the first instruction that escaped each object
 	// in each way, for the dump.
 	escapeOrigins map[escapeOrigin]ssa.Instruction
@@ -378,25 +383,8 @@ func (graph *regionGraph) boundValue(value ssa.Value) {
 		graph.widened = append(graph.widened, widening{target: graph.opaque(value).at(""), at: instruction, size: set.Len()})
 	}
 	graph.values[value] = pointeesOf(graph.unkR.at(""), false)
+	graph.markChanged(value)
 }
-
-// regionBuildBudget bounds the instruction transfers one graph may spend,
-// across every fixpoint round. A function past it is unavailable rather
-// than half-modeled.
-const regionBuildBudget = 200_000
-
-// regionFixpointRounds bounds the plain rounds over the blocks. Ordinary
-// loops settle in two or three. A body that has not settled by then is
-// widened; one that has settled is never widened, so its graph is exactly
-// the least fixpoint the plain rounds compute.
-const regionFixpointRounds = 6
-
-// regionWideningRounds bounds the rounds after widening starts. Widening
-// only coarsens a loop header's entry, so a body settles within a few more
-// rounds or is unavailable. Escapes are left to grow: they accumulate over
-// finitely many slots, but can take a step a round to cross nested maps, as
-// caddy's httpcaddyfile mapAddressToProtocolToServerBlocks needs eight.
-const regionWideningRounds = 8
 
 func buildRegionGraph(function *ssa.Function) *regionGraph {
 	graph := &regionGraph{
@@ -471,182 +459,6 @@ func (graph *regionGraph) blockID(block *ssa.BasicBlock) int {
 	return -(block.Index + 1)
 }
 
-// fixpoint runs the transfer over the blocks in reverse postorder until the
-// entry states settle, and reports whether they did within the bounds.
-func (graph *regionGraph) fixpoint() (GraphBuildReason, string) {
-	function := graph.function
-	if len(function.Blocks) == 0 {
-		return GraphBuildNoBody, ""
-	}
-	graph.entry[function.Blocks[0]] = newRegionState()
-	out := map[*ssa.BasicBlock]*regionState{}
-	headers := loopHeaders(function)
-	acyclic := !hasRetreatingEdge(graph.order, len(function.Blocks))
-	// unsettled explains a body that never settles: the blocks that still
-	// changed in the last round. Earlier rounds change on every ordinary
-	// loop, and describing those differences cost more than the transfers.
-	var unsettled []string
-	var previous *loopSnapshot
-	rounds := regionFixpointRounds + regionWideningRounds
-	unspent := graph.budget.Remaining()
-	for round := range rounds {
-		last := round == rounds-1
-		graph.widening = previous
-		// Snapshots start one round before widening, so the first widened
-		// round can tell what the last plain round still changed.
-		var current *loopSnapshot
-		if round >= regionFixpointRounds-1 {
-			current = newLoopSnapshot()
-		}
-		changed := false
-		for _, block := range graph.order {
-			in := graph.entryState(block, out)
-			if in == nil {
-				continue
-			}
-			if headers[block] {
-				if previous != nil {
-					graph.widen(in, previous.entries[block], block)
-				}
-				if current != nil {
-					current.recordEntry(block, in)
-				}
-			}
-			state, ok := graph.runBlock(block, in)
-			if !ok {
-				return GraphBuildBudgetExhausted, ""
-			}
-			if previous, ok := out[block]; !ok || !previous.equal(state) {
-				changed = true
-				if ok && last {
-					unsettled = append(unsettled, "block "+strconv.Itoa(block.Index)+": "+previous.difference(state))
-				}
-			}
-			out[block] = state
-		}
-		if !changed || round == 0 && acyclic {
-			return graph.settle(out, changed, unspent-graph.budget.Remaining())
-		}
-		if current != nil {
-			current.recordPhis(graph, headers)
-		}
-		previous = current
-	}
-	graph.widening = nil
-	return GraphBuildFixpointLimit, "in " + strconv.Itoa(rounds) + " rounds; changes: " + strings.Join(unsettled, " | ")
-}
-
-// Without a retreating edge every block follows all its predecessors in
-// reverse postorder, and every value it reads is defined before it, so the
-// first round computes each out state from final inputs and a second round
-// could only confirm them. It was half of all region graph work. The skipped
-// round is still charged to the build budget, so which functions build does
-// not change. A transfer's call-effect proofs spend that budget too, so the
-// charge is what the first round spent, not one unit per instruction.
-
-// hasRetreatingEdge reports whether an edge leads to a block no later in
-// order than its source: a loop, reducible or not.
-func hasRetreatingEdge(order []*ssa.BasicBlock, blocks int) bool {
-	position := make([]int, blocks)
-	for index, block := range order {
-		position[block.Index] = index + 1
-	}
-	for _, block := range order {
-		for _, successor := range block.Succs {
-			if position[successor.Index] <= position[block.Index] {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// runBlock transfers a block's instructions over its own copy of in, and
-// reports false when the build budget runs out.
-func (graph *regionGraph) runBlock(block *ssa.BasicBlock, in *regionState) (*regionState, bool) {
-	state := in.clone()
-	for _, instruction := range block.Instrs {
-		if !graph.budget.Spend() {
-			return nil, false
-		}
-		graph.transfer(state, instruction)
-	}
-	return state, true
-}
-
-// settle accepts the out states. A round that still changed them is the
-// first round of a loop-free function, and the confirming round it skips is
-// charged as if it ran: that round would repeat the first round's transfers
-// from the same states, call-effect proofs included, so it would spend what
-// the first round spent.
-func (graph *regionGraph) settle(out map[*ssa.BasicBlock]*regionState, changed bool, spent int) (GraphBuildReason, string) {
-	graph.widening = nil
-	if changed {
-		for range spent {
-			if !graph.budget.Spend() {
-				return GraphBuildBudgetExhausted, ""
-			}
-		}
-	}
-	graph.exit = out
-	return GraphBuildComplete, ""
-}
-
-// entryState merges the predecessors' out states into the block's entry
-// state, marking back edges, and returns nil for a block nothing reaches yet.
-func (graph *regionGraph) entryState(block *ssa.BasicBlock, out map[*ssa.BasicBlock]*regionState) *regionState {
-	if block == graph.function.Blocks[0] {
-		return graph.entry[block]
-	}
-	if shared := soleForwardEntry(block, out); shared != nil {
-		graph.entry[block] = shared
-		return shared
-	}
-	var merged *regionState
-	for _, predecessor := range block.Preds {
-		state, ok := out[predecessor]
-		if !ok {
-			continue
-		}
-		if merged == nil {
-			merged = state.clone()
-			if block.Dominates(predecessor) {
-				graph.merge(merged, state, true, block)
-			}
-			continue
-		}
-		graph.merge(merged, state, block.Dominates(predecessor), block)
-	}
-	if merged == nil {
-		return nil
-	}
-	graph.entry[block] = merged
-	return merged
-}
-
-// soleForwardEntry returns the out state of a block's only reached
-// predecessor when no back edge enters the block. Its entry is then that
-// state unchanged, so it is shared rather than cloned: nothing writes an out
-// state once stored, the transfer works on its own clone, and a block a back
-// edge enters, whose entry widening may change, never shares.
-func soleForwardEntry(block *ssa.BasicBlock, out map[*ssa.BasicBlock]*regionState) *regionState {
-	var sole *regionState
-	for _, predecessor := range block.Preds {
-		if block.Dominates(predecessor) {
-			return nil
-		}
-		state, ok := out[predecessor]
-		if !ok {
-			continue
-		}
-		if sole != nil {
-			return nil
-		}
-		sole = state
-	}
-	return sole
-}
-
 // stateAt replays the block's entry state up to, but not including, the
 // instruction, so a query sees memory as it was when the instruction ran.
 func (graph *regionGraph) stateAt(instruction ssa.Instruction) *regionState {
@@ -665,27 +477,6 @@ func (graph *regionGraph) stateAt(instruction ssa.Instruction) *regionState {
 		graph.transfer(state, candidate)
 	}
 	return nil
-}
-
-func reversePostorder(function *ssa.Function) []*ssa.BasicBlock {
-	seen := map[*ssa.BasicBlock]bool{}
-	var order []*ssa.BasicBlock
-	var visit func(block *ssa.BasicBlock)
-	visit = func(block *ssa.BasicBlock) {
-		if seen[block] {
-			return
-		}
-		seen[block] = true
-		for _, successor := range block.Succs {
-			visit(successor)
-		}
-		order = append(order, block)
-	}
-	visit(function.Blocks[0])
-	for i, j := 0, len(order)-1; i < j; i, j = i+1, j-1 {
-		order[i], order[j] = order[j], order[i]
-	}
-	return order
 }
 
 // joinSlotPath appends a step, or a whole path, to a slot path.

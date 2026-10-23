@@ -23,7 +23,19 @@ type Set[K comparable] struct {
 	inline [Inline]K
 	count  uint8
 	flags  uint8
-	spill  map[K]bool
+	// version counts the changes to the set's members or flags, so a
+	// caller can tell whether an update changed anything.
+	version uint32
+	spill   map[K]bool
+}
+
+// Version changes whenever the set's members or their flags do; a nil set
+// has version zero.
+func (set *Set[K]) Version() uint32 {
+	if set == nil {
+		return 0
+	}
+	return set.version
 }
 
 // Len returns the number of members.
@@ -64,7 +76,10 @@ func (set *Set[K]) find(key K) int {
 // Put adds key with flag, or replaces the flag of a member.
 func (set *Set[K]) Put(key K, flag bool) {
 	if set.spill != nil {
-		set.spill[key] = flag
+		if old, ok := set.spill[key]; !ok || old != flag {
+			set.spill[key] = flag
+			set.version++
+		}
 		return
 	}
 	index := set.find(key)
@@ -72,13 +87,20 @@ func (set *Set[K]) Put(key K, flag bool) {
 		if set.count == Inline {
 			set.spillAll()
 			set.spill[key] = flag
+			set.version++
 			return
 		}
 		index = int(set.count)
 		set.inline[index] = key
 		set.count++
+		set.setFlag(index, flag)
+		set.version++
+		return
 	}
-	set.setFlag(index, flag)
+	if (set.flags&(1<<index) != 0) != flag {
+		set.setFlag(index, flag)
+		set.version++
+	}
 }
 
 func (set *Set[K]) setFlag(index int, flag bool) {
@@ -94,7 +116,7 @@ func (set *Set[K]) spillAll() {
 	for index := range set.count {
 		spill[set.inline[index]] = set.flags&(1<<index) != 0
 	}
-	*set = Set[K]{spill: spill}
+	*set = Set[K]{spill: spill, version: set.version}
 }
 
 // Remove deletes key if it is a member.
@@ -103,13 +125,17 @@ func (set *Set[K]) Remove(key K) {
 	case set == nil:
 		return
 	case set.spill != nil:
-		delete(set.spill, key)
+		if _, ok := set.spill[key]; ok {
+			delete(set.spill, key)
+			set.version++
+		}
 		return
 	}
 	index := set.find(key)
 	if index < 0 {
 		return
 	}
+	set.version++
 	last := int(set.count) - 1
 	set.inline[index] = set.inline[last]
 	set.setFlag(index, set.flags&(1<<last) != 0)
@@ -121,8 +147,8 @@ func (set *Set[K]) Remove(key K) {
 
 // Clear removes every member and returns the set to inline storage.
 func (set *Set[K]) Clear() {
-	if set != nil {
-		*set = Set[K]{}
+	if set != nil && set.Len() != 0 {
+		*set = Set[K]{version: set.version + 1}
 	}
 }
 

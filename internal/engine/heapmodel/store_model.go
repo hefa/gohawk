@@ -1,3 +1,9 @@
+// Package heapmodel owns bounded storage queries, the per-function points-to
+// graph, heap summaries, and call-site substitution. Storage combines exact
+// reaching-write and graph evidence; unknown never means empty or disjoint.
+// It uses lower-level SSA mechanics from ssaflow. Completion, resource, and
+// synchronization models consume this evidence without redefining identity;
+// analyzers decide what the evidence proves for a check.
 package heapmodel
 
 import (
