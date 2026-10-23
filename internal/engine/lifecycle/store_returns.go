@@ -344,7 +344,19 @@ func ReturnedResultWithin(returned *ssa.Return, index int, budget *proofs.Search
 // conversion to an interface, or a value chosen between the parameter and
 // something else is not the parameter. A body with no reachable normal
 // return proves nothing.
+//
+// A result declared with another type cannot hand back the parameter under
+// its own type, so it is refused before the path walk: callers ask about
+// every result of every function, most results have other types, and the
+// walks were a twentieth of everything a run allocated.
 func ReturnsParameterUnchanged(function *ssa.Function, parameter ssa.Value, index int) bool {
+	if function == nil || parameter == nil {
+		return false
+	}
+	results := function.Signature.Results()
+	if index < 0 || index >= results.Len() || !types.Identical(results.At(index).Type(), parameter.Type()) {
+		return false
+	}
 	return ProveReturnedParameterWithin(function, parameter, index, nil).Proven()
 }
 
