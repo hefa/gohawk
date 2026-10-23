@@ -127,13 +127,13 @@ func external(*int)
 }
 
 func TestEscapeReachabilityCutoffs(t *testing.T) {
-	target := slot{region: &region{kind: regionSite}}
+	target := (&region{kind: regionSite}).at("")
 	graph := &regionGraph{}
 	state := newRegionState()
 	if _, complete := graph.escapeReachability(state, pointeesOf(target, false), target, proofs.NewSearchBudget(0)); complete {
 		t.Fatal("exhausted query claimed complete reachability")
 	}
-	unknown := slot{region: &region{kind: regionUnknown}}
+	unknown := (&region{kind: regionUnknown}).at("")
 	for range 32 {
 		roots := setOf(map[slot]bool{target: false, unknown: false})
 		found, complete := graph.escapeReachability(state, roots, target, proofs.NewSearchBudget(proofs.QueryBudget))
@@ -144,7 +144,7 @@ func TestEscapeReachabilityCutoffs(t *testing.T) {
 	if _, complete := graph.escapeReachability(state, pointeesOf(unknown, false), target, proofs.NewSearchBudget(proofs.QueryBudget)); complete {
 		t.Fatal("unknown contents proved non-escape")
 	}
-	owner := slot{region: &region{kind: regionSite}}
+	owner := (&region{kind: regionSite}).at("")
 	state.contents[owner] = pointeesOf(owner, false)
 	if found, complete := graph.escapeReachability(state, pointeesOf(owner, false), target, proofs.NewSearchBudget(proofs.QueryBudget)); found || !complete {
 		t.Fatal("exact local cycle did not terminate with a negative answer")

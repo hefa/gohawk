@@ -179,7 +179,7 @@ func (projection *heapProjection) nonNil(value ssa.Value) []requirementKey {
 	if !ok || target.region.kind == regionNil {
 		return nil
 	}
-	return []requirementKey{{slot: slot{region: target.region}, kind: HeapRequiresNonNil}}
+	return []requirementKey{{slot: target.region.at(""), kind: HeapRequiresNonNil}}
 }
 
 // callRequirements names what one call requires: a method call whose
@@ -205,7 +205,7 @@ func (projection *heapProjection) callRequirements(call *ssa.Call) []requirement
 		if !ok {
 			continue
 		}
-		target := projection.throughLocal(slot{region: base.region, path: joinSlotPath(base.path, requirement.Slot.Path)}, call)
+		target := projection.throughLocal(base.region.at(joinSlotPath(base.path, requirement.Slot.Path)), call)
 		keys = append(keys, requirementKey{slot: target, kind: requirement.Kind, method: requirement.Method})
 	}
 	return keys
@@ -227,16 +227,16 @@ func (projection *heapProjection) throughLocal(target slot, call ssa.Instruction
 		return target
 	}
 	steps := ssaflow.SplitAccessPath(target.path)
-	current := slot{region: target.region}
+	current := target.region.at("")
 	for index, step := range steps {
-		current.path = joinSlotPath(current.path, step)
+		current = current.region.at(joinSlotPath(current.path, step))
 		held, ok := singleSlot(projection.graph.contentView(state, current))
 		if !ok || held.region.kind == regionNil {
 			return target
 		}
 		rest := ssaflow.JoinAccessPath(steps[index+1:])
 		if held.region.kind != regionSite {
-			return slot{region: held.region, path: joinSlotPath(held.path, rest)}
+			return held.region.at(joinSlotPath(held.path, rest))
 		}
 		current = held
 	}

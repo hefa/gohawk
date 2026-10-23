@@ -350,7 +350,7 @@ func createdInsideLoop(object *region, header *ssa.BasicBlock) bool {
 	case regionNil, regionUnknown, regionExternal:
 		return false
 	case regionPlaceholder:
-		return createdInsideLoop(object.source.region, header)
+		return createdInsideLoop(regionOf(object.source), header)
 	case regionSite, regionOpaque, regionSnapshot, regionClosure:
 	}
 	instruction, ok := object.origin.(ssa.Instruction)
@@ -546,7 +546,7 @@ func (graph *regionGraph) widen(state, previous *regionState, header *ssa.BasicB
 			continue
 		}
 		graph.widened = append(graph.widened, widening{target: target, size: set.Len()})
-		state.contents[target] = pointeesOf(slot{region: graph.unkR}, false)
+		state.contents[target] = pointeesOf(graph.unkR.at(""), false)
 		state.own(target)
 	}
 	if state.epoch != previous.epoch {
@@ -574,7 +574,7 @@ func (graph *regionGraph) widen(state, previous *regionState, header *ssa.BasicB
 		}
 	}
 	if !state.deferred.equal(previous.deferred) && !state.deferred.unknown() {
-		state.deferred = pointeesOf(slot{region: graph.unkR}, false)
+		state.deferred = pointeesOf(graph.unkR.at(""), false)
 	}
 }
 
@@ -591,6 +591,6 @@ func (graph *regionGraph) widenPhi(phi *ssa.Phi) {
 	if !ok || old.equal(set) || set.unknown() {
 		return
 	}
-	graph.widened = append(graph.widened, widening{target: slot{region: graph.opaque(phi)}, at: phi, size: set.Len()})
-	graph.values[phi] = pointeesOf(slot{region: graph.unkR}, false)
+	graph.widened = append(graph.widened, widening{target: graph.opaque(phi).at(""), at: phi, size: set.Len()})
+	graph.values[phi] = pointeesOf(graph.unkR.at(""), false)
 }

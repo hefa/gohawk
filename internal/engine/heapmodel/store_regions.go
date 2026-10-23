@@ -69,6 +69,9 @@ type region struct {
 	order  string
 	// whole is the read-only set holding just this object, for singleton.
 	whole pointees
+	// root and slots intern the region's slots; see at.
+	root  slotNode
+	slots map[string]slot
 }
 
 // versionStamp identifies the last unfollowed write that may have changed a
@@ -82,10 +85,42 @@ type versionStamp struct {
 }
 
 // slot is one abstract location: a region and an access path beneath it in
-// JoinAccessPath form, empty for the object itself.
-type slot struct {
+// JoinAccessPath form, empty for the object itself. A region interns its
+// slots, so one location is one pointer: two slots are the same location
+// exactly when they are equal, and the many maps and sets keyed by slot hash
+// and hold a pointer rather than a region and a path. A nil slot is none.
+type slot *slotNode
+
+type slotNode struct {
 	region *region
 	path   string
+}
+
+// regionOf returns the slot's region, nil for no slot.
+func regionOf(target slot) *region {
+	if target == nil {
+		return nil
+	}
+	return target.region
+}
+
+// at returns the region's slot at path.
+func (object *region) at(path string) slot {
+	if path == "" {
+		if object.root.region == nil {
+			object.root.region = object
+		}
+		return slot(&object.root)
+	}
+	if found, ok := object.slots[path]; ok {
+		return found
+	}
+	if object.slots == nil {
+		object.slots = map[string]slot{}
+	}
+	created := slot(&slotNode{region: object, path: path})
+	object.slots[path] = created
+	return created
 }
 
 // pathStar is the element step of an array or slice indexed dynamically; it
@@ -329,7 +364,7 @@ func (graph *regionGraph) bound(state *regionState, target slot, at ssa.Instruct
 		return
 	}
 	graph.widened = append(graph.widened, widening{target: target, at: at, size: set.Len()})
-	state.contents[target] = pointeesOf(slot{region: graph.unkR}, false)
+	state.contents[target] = pointeesOf(graph.unkR.at(""), false)
 }
 
 // boundValue collapses a value's pointees to unknown when they outgrew the
@@ -340,24 +375,9 @@ func (graph *regionGraph) boundValue(value ssa.Value) {
 		return
 	}
 	if instruction, ok := value.(ssa.Instruction); ok {
-		graph.widened = append(graph.widened, widening{target: slot{region: graph.opaque(value)}, at: instruction, size: set.Len()})
+		graph.widened = append(graph.widened, widening{target: graph.opaque(value).at(""), at: instruction, size: set.Len()})
 	}
-	graph.values[value] = pointeesOf(slot{region: graph.unkR}, false)
-}
-
-// appliedSummary is one summary application, for the dump.
-type appliedSummary struct {
-	instruction ssa.Instruction
-	callee      *ssa.Function
-	reason      CallApplicationReason
-	edges       int
-	effects     int
-	truncated   int
-}
-
-// sliceView is a constant window over a local array.
-type sliceView struct {
-	offset, size, capacity int64
+	graph.values[value] = pointeesOf(graph.unkR.at(""), false)
 }
 
 // regionBuildBudget bounds the instruction transfers one graph may spend,
@@ -377,25 +397,6 @@ const regionFixpointRounds = 6
 // finitely many slots, but can take a step a round to cross nested maps, as
 // caddy's httpcaddyfile mapAddressToProtocolToServerBlocks needs eight.
 const regionWideningRounds = 8
-
-func valueFunction(value ssa.Value) *ssa.Function {
-	switch typed := value.(type) {
-	case nil:
-		return nil
-	case ssa.Instruction:
-		// An instruction outside any block, such as one a test built by
-		// hand, belongs to no function.
-		if typed.Block() == nil {
-			return nil
-		}
-		return typed.Parent()
-	case *ssa.Parameter:
-		return typed.Parent()
-	case *ssa.FreeVar:
-		return typed.Parent()
-	}
-	return nil
-}
 
 func buildRegionGraph(function *ssa.Function) *regionGraph {
 	graph := &regionGraph{

@@ -25,17 +25,17 @@ func (projection *heapProjection) projectConditionalCopy(
 		object = &region{kind: regionOpaque}
 		projection.copies[root.Index] = object
 	}
-	record(HeapSlot{Root: root}, pointeesOf(slot{region: object}, false))
+	record(HeapSlot{Root: root}, pointeesOf(object.at(""), false))
 	walkStructReferences(result.Type(), func(path string) {
 		contents := newPointees()
 		for source, stale := range set.all() {
-			target := slot{region: source.region, path: joinSlotPath(source.path, path)}
+			target := source.region.at(joinSlotPath(source.path, path))
 			for pointee, old := range projection.copyContent(state, target).all() {
 				contents.add(pointee, stale || old)
 			}
 		}
 		if contents.Len() == 0 {
-			contents.add(slot{region: projection.graph.unkR}, false)
+			contents.add(projection.graph.unkR.at(""), false)
 		}
 		record(HeapSlot{Root: root, Path: path}, contents)
 	}, func(path string) { projection.truncate(HeapSlot{Root: root, Path: path}) })
@@ -59,7 +59,7 @@ func (projection *heapProjection) resultContents(state *regionState, object slot
 		}
 	}
 	walkStructReferences(typ, func(path string) {
-		target := slot{region: object.region, path: path}
+		target := object.region.at(path)
 		if _, materialized := contents[target]; !materialized {
 			contents[target] = projection.copyContent(state, target)
 		}
@@ -74,7 +74,7 @@ func (projection *heapProjection) copyContent(state *regionState, target slot) p
 			// A placeholder after an opaque write names a later version of the
 			// slot, while summaries name the caller's entry values. They cannot
 			// express that version, so it must not become a preserved field.
-			return pointeesOf(slot{region: projection.graph.unkR}, false)
+			return pointeesOf(projection.graph.unkR.at(""), false)
 		}
 	}
 	return set

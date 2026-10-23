@@ -74,7 +74,7 @@ func (graph *regionGraph) define(state *regionState, instruction ssa.Instruction
 	case operations.Load:
 		graph.setValue(plan.Value, graph.loadView(state, graph.pointees(plan.Source), plan.Value))
 	case operations.Opaque:
-		graph.setValue(plan.Value, pointeesOf(slot{region: graph.opaque(plan.Value)}, false))
+		graph.setValue(plan.Value, pointeesOf(graph.opaque(plan.Value).at(""), false))
 	case operations.Ignored:
 	}
 }
@@ -84,7 +84,7 @@ func (graph *regionGraph) define(state *regionState, instruction ssa.Instruction
 // constants, and functions.
 func (graph *regionGraph) pointees(value ssa.Value) pointees {
 	if value == nil {
-		return pointeesOf(slot{region: graph.unkR}, false)
+		return pointeesOf(graph.unkR.at(""), false)
 	}
 	if set, ok := graph.values[value]; ok {
 		return set
@@ -95,20 +95,20 @@ func (graph *regionGraph) pointees(value ssa.Value) pointees {
 	if owner := valueFunction(value); owner != nil && owner != graph.function {
 		// A value of another function, such as a closure's parameter or
 		// free variable, may refer to anything this function holds.
-		return pointeesOf(slot{region: graph.unkR}, false)
+		return pointeesOf(graph.unkR.at(""), false)
 	}
 	var set pointees
 	switch operations.Leaf(value, graph.function) {
 	case operations.LeafExternal:
-		set = pointeesOf(slot{region: graph.external(value)}, false)
+		set = pointeesOf(graph.external(value).at(""), false)
 	case operations.LeafNil:
-		set = pointeesOf(slot{region: graph.nilR}, false)
+		set = pointeesOf(graph.nilR.at(""), false)
 	case operations.LeafOpaque:
-		set = pointeesOf(slot{region: graph.opaque(value)}, false)
+		set = pointeesOf(graph.opaque(value).at(""), false)
 	case operations.LeafPending:
 		return newPointees()
 	case operations.LeafUnknown:
-		set = pointeesOf(slot{region: graph.unkR}, false)
+		set = pointeesOf(graph.unkR.at(""), false)
 	}
 	graph.values[value] = set
 	return set
@@ -147,11 +147,11 @@ func (graph *regionGraph) setValue(value ssa.Value, set pointees) {
 // zeroing is weak there.
 func (graph *regionGraph) allocate(state *regionState, alloc *ssa.Alloc) {
 	site := graph.site(alloc)
-	graph.setValue(alloc, pointeesOf(slot{region: site}, false))
+	graph.setValue(alloc, pointeesOf(site.at(""), false))
 	if cfg.BlockInCycle(alloc.Block()) && state.escaped[site] {
 		return
 	}
-	graph.clearSubtree(state, slot{region: site})
+	graph.clearSubtree(state, site.at(""))
 }
 
 // selectStep returns the slots one step beneath each of the bases. Its result
@@ -167,7 +167,7 @@ func (graph *regionGraph) selectStep(bases pointees, step string) pointees {
 			case regionNil:
 				return newPointees()
 			case regionSite, regionExternal, regionOpaque, regionPlaceholder, regionSnapshot, regionClosure:
-				return graph.singleton(slot{region: base.region, path: joinSlotPath(base.path, step)}, stale)
+				return graph.singleton(base.region.at(joinSlotPath(base.path, step)), stale)
 			}
 		}
 	}
@@ -184,7 +184,7 @@ func (graph *regionGraph) selectStep(bases pointees, step string) pointees {
 			// make every element alias every object in the function.
 			// https://github.com/ipfs/boxo/blob/3d6ac39a0f76c824ffbb90e3a729e78f62bc2d12/routing/mock/centralized_server.go#L61-L77
 		case regionSite, regionExternal, regionOpaque, regionPlaceholder, regionSnapshot, regionClosure:
-			result.add(slot{region: base.region, path: joinSlotPath(base.path, step)}, stale)
+			result.add(base.region.at(joinSlotPath(base.path, step)), stale)
 		}
 	}
 	return result
@@ -204,6 +204,11 @@ func (graph *regionGraph) index(base, index ssa.Value) pointees {
 		}
 	}
 	return graph.selectStep(bases, step)
+}
+
+// sliceView is a constant window over a local array.
+type sliceView struct {
+	offset, size, capacity int64
 }
 
 // view returns a recorded slice window or an array's full window. An
@@ -336,14 +341,14 @@ func (graph *regionGraph) extract(extract *ssa.Extract) {
 			return
 		}
 	}
-	graph.setValue(extract, pointeesOf(slot{region: graph.opaque(extract)}, false))
+	graph.setValue(extract, pointeesOf(graph.opaque(extract).at(""), false))
 }
 
 func (graph *regionGraph) makeClosure(state *regionState, closure *ssa.MakeClosure) {
 	object := graph.closure(closure)
-	graph.setValue(closure, pointeesOf(slot{region: object}, false))
+	graph.setValue(closure, pointeesOf(object.at(""), false))
 	for index, binding := range closure.Bindings {
-		target := slot{region: object, path: "binding:" + strconv.Itoa(index)}
+		target := object.at("binding:" + strconv.Itoa(index))
 		state.contents[target] = graph.pointees(binding).clone()
 		graph.remember(target, state.contents[target])
 	}
@@ -383,12 +388,12 @@ func (graph *regionGraph) selectedSnapshot(state *regionState, address slot, sta
 		contents := newPointees()
 		for offset := range view.size {
 			element := joinSlotPath(parentPath(address.path), "index:"+strconv.FormatInt(view.offset+offset, 10))
-			source := slot{region: address.region, path: joinSlotPath(element, path)}
+			source := address.region.at(joinSlotPath(element, path))
 			for target, old := range graph.contentView(state, source).all() {
 				contents.add(target, stale || old)
 			}
 		}
-		target := slot{region: snapshot, path: path}
+		target := snapshot.at(path)
 		state.contents[target] = contents
 		graph.bound(state, target, load)
 		graph.remember(target, state.contents[target])

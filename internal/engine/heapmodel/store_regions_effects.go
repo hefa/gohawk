@@ -115,7 +115,7 @@ func (graph *regionGraph) invalidateForeign(state *regionState, step string, sta
 	// cannot be listed; the slots it did write keep their own entries.
 	for object := range state.escaped {
 		if object.kind == regionSite {
-			state.mutableClobbered()[slot{region: object}] = stamp
+			state.mutableClobbered()[object.at("")] = stamp
 		}
 	}
 	if step == "" {
@@ -156,13 +156,13 @@ func (graph *regionGraph) foreign(state *regionState, object *region, reach fore
 		if _, global := object.origin.(*ssa.Global); global || reach == reachAny {
 			return true
 		}
-		return state.escapes[slot{region: object}]&unknownReach != 0
+		return state.escapes[object.at("")]&unknownReach != 0
 	case regionOpaque:
 		return true
 	case regionPlaceholder:
-		return reach == reachAny || state.escapes[slot{region: object}]&unknownReach != 0 || graph.foreign(state, object.source.region, reach)
+		return reach == reachAny || state.escapes[object.at("")]&unknownReach != 0 || graph.foreign(state, regionOf(object.source), reach)
 	case regionClosure:
-		return reach == reachAny || state.escapes[slot{region: object}]&unknownReach != 0
+		return reach == reachAny || state.escapes[object.at("")]&unknownReach != 0
 	case regionNil, regionUnknown, regionSnapshot:
 		return false
 	}
@@ -182,7 +182,7 @@ func (graph *regionGraph) reachOf(state *regionState, object *region) HeapEscape
 		return HeapEscapedCall
 	case regionSite, regionPlaceholder, regionClosure, regionSnapshot, regionNil, regionUnknown:
 	}
-	return state.escapes[slot{region: object}] & unknownReach
+	return state.escapes[object.at("")] & unknownReach
 }
 
 // escape marks every slot reachable from the pointees as having left local
@@ -278,8 +278,8 @@ func (graph *regionGraph) clobber(state *regionState, set pointees, stamp int) {
 			}
 		}
 		if object.kind == regionSite {
-			state.mutableClobbered()[slot{region: object}] = stamp
-			state.forgetStoredSubtree(slot{region: object})
+			state.mutableClobbered()[object.at("")] = stamp
+			state.forgetStoredSubtree(object.at(""))
 		}
 	}
 }
@@ -301,7 +301,7 @@ func (graph *regionGraph) closureOnlyReads(closure *region, captured slot) bool 
 // handed.
 func (graph *regionGraph) call(state *regionState, common *ssa.CallCommon, instruction ssa.Instruction, started bool) {
 	if value, ok := instruction.(ssa.Value); ok {
-		graph.setValue(value, pointeesOf(slot{region: graph.opaque(value)}, false))
+		graph.setValue(value, pointeesOf(graph.opaque(value).at(""), false))
 	}
 	if graph.definedCall(state, common, instruction, started) {
 		return
@@ -405,22 +405,22 @@ func (graph *regionGraph) mapUpdate(state *regionState, update *ssa.MapUpdate) {
 		return
 	}
 	for target := range targets.all() {
-		graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, "elem")}, value)
-		graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, "key")}, key)
+		graph.weakElementStore(state, target.region.at(joinSlotPath(target.path, "elem")), value)
+		graph.weakElementStore(state, target.region.at(joinSlotPath(target.path, "key")), key)
 	}
 }
 
 func (graph *regionGraph) lookup(state *regionState, lookup *ssa.Lookup) {
-	result := pointeesOf(slot{region: graph.opaque(lookup)}, false)
+	result := pointeesOf(graph.opaque(lookup).at(""), false)
 	if _, ok := lookup.X.Type().Underlying().(*types.Map); ok {
 		if graph.widening != nil && graph.pointees(lookup.X).unknown() {
 			// The read matching mapUpdate's opaque write while widening.
-			result.add(slot{region: graph.unkR}, false)
+			result.add(graph.unkR.at(""), false)
 			graph.setValue(lookup, result)
 			return
 		}
 		for target := range graph.pointees(lookup.X).all() {
-			if set, ok := state.contents[slot{region: target.region, path: joinSlotPath(target.path, "elem")}]; ok {
+			if set, ok := state.contents[target.region.at(joinSlotPath(target.path, "elem"))]; ok {
 				result.union(set)
 			}
 		}
@@ -507,7 +507,7 @@ func (graph *regionGraph) builtin(state *regionState, builtin *ssa.Builtin, comm
 			return
 		}
 		result := graph.pointees(common.Args[0]).clone()
-		result.add(slot{region: graph.opaque(value)}, false)
+		result.add(graph.opaque(value).at(""), false)
 		graph.setValue(value, result)
 		for _, argument := range common.Args[1:] {
 			elements := graph.pointees(argument)
@@ -519,7 +519,7 @@ func (graph *regionGraph) builtin(state *regionState, builtin *ssa.Builtin, comm
 				elements = graph.loadView(state, graph.selectStep(elements, pathStar), argument)
 			}
 			for target := range result.all() {
-				graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, pathStar)}, elements)
+				graph.weakElementStore(state, target.region.at(joinSlotPath(target.path, pathStar)), elements)
 			}
 			graph.escape(state, elements, HeapEscapedField, instruction)
 		}
@@ -529,7 +529,7 @@ func (graph *regionGraph) builtin(state *regionState, builtin *ssa.Builtin, comm
 		}
 		elements := graph.loadView(state, graph.selectStep(graph.pointees(common.Args[1]), pathStar), common.Args[1])
 		for target := range graph.pointees(common.Args[0]).all() {
-			graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, pathStar)}, elements)
+			graph.weakElementStore(state, target.region.at(joinSlotPath(target.path, pathStar)), elements)
 		}
 	case "clear":
 		if len(common.Args) != 1 {

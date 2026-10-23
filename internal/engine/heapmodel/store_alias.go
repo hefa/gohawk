@@ -191,7 +191,7 @@ func (graph *regionGraph) publishedAfterUnlocked(object *region, at ssa.Instruct
 		if !cfg.InstructionMayFollow(at, returned) {
 			continue
 		}
-		if state := graph.stateAt(returned); state != nil && state.escapes[slot{region: object}]&publication != 0 {
+		if state := graph.stateAt(returned); state != nil && state.escapes[object.at("")]&publication != 0 {
 			return true
 		}
 	}
@@ -204,12 +204,12 @@ func (graph *regionGraph) publishedAfterUnlocked(object *region, at ssa.Instruct
 func singleObjectSlot(set pointees) (slot, bool) {
 	var object slot
 	for target, stale := range set.all() {
-		if stale || target.region.kind == regionUnknown || object.region != nil && object.region != target.region {
-			return slot{}, false
+		if stale || target.region.kind == regionUnknown || object != nil && object.region != target.region {
+			return nil, false
 		}
-		object = slot{region: target.region}
+		object = target.region.at("")
 	}
-	return object, object.region != nil
+	return object, object != nil
 }
 
 // StableContent adds a lifetime check to Content: no other use may change the

@@ -121,13 +121,13 @@ func (substitution *heapSubstitution) slots(at HeapSlot) pointees {
 			values = substitution.binding.captures
 		}
 		if at.Root.Index < 0 || at.Root.Index >= len(values) {
-			return substitution.graph.singleton(slot{region: substitution.graph.unkR}, false)
+			return substitution.graph.singleton(substitution.graph.unkR.at(""), false)
 		}
 		base = substitution.graph.pointees(values[at.Root.Index])
 	case HeapGlobal:
 		base = substitution.globalSlots(at.Root)
 	case HeapResult:
-		base = substitution.graph.singleton(slot{region: substitution.freshObject("result:" + strconv.Itoa(at.Root.Index))}, false)
+		base = substitution.graph.singleton(substitution.freshObject("result:"+strconv.Itoa(at.Root.Index)).at(""), false)
 	}
 	if at.Path == "" {
 		return base
@@ -147,11 +147,11 @@ func (substitution *heapSubstitution) globalSlots(root HeapRoot) pointees {
 	if callee := substitution.binding.callee; callee != nil && callee.Prog != nil {
 		if pkg := callee.Prog.ImportedPackage(root.Package); pkg != nil {
 			if global, ok := pkg.Members[root.Name].(*ssa.Global); ok {
-				return substitution.graph.singleton(slot{region: substitution.graph.external(global)}, false)
+				return substitution.graph.singleton(substitution.graph.external(global).at(""), false)
 			}
 		}
 	}
-	return substitution.graph.singleton(slot{region: substitution.foreignObject("global:" + root.Package + "." + root.Name)}, false)
+	return substitution.graph.singleton(substitution.foreignObject("global:"+root.Package+"."+root.Name).at(""), false)
 }
 
 // foreignObject interns an object the function did not allocate and cannot
@@ -182,7 +182,7 @@ func (substitution *heapSubstitution) freshObject(origin string) *region {
 func (substitution *heapSubstitution) targets(target HeapTarget, at HeapSlot) (pointees, bool) {
 	switch target.Kind {
 	case HeapTargetNil:
-		return substitution.graph.singleton(slot{region: substitution.graph.nilR}, false), true
+		return substitution.graph.singleton(substitution.graph.nilR.at(""), false), true
 	case HeapTargetUnknown:
 		// Content the summary could not describe is, from here, one
 		// foreign object per slot: not "anything", which would alias
@@ -191,11 +191,11 @@ func (substitution *heapSubstitution) targets(target HeapTarget, at HeapSlot) (p
 		// undescribed slot beneath a result is foreign content like any
 		// other, never the result itself.
 		if at.Root.Kind == HeapResult && at.Path == "" {
-			return substitution.graph.singleton(slot{region: substitution.freshObject("result:" + strconv.Itoa(at.Root.Index))}, false), true
+			return substitution.graph.singleton(substitution.freshObject("result:"+strconv.Itoa(at.Root.Index)).at(""), false), true
 		}
-		return substitution.graph.singleton(slot{region: substitution.foreignObject("content:" + at.String())}, false), true
+		return substitution.graph.singleton(substitution.foreignObject("content:"+at.String()).at(""), false), true
 	case HeapTargetFresh:
-		return substitution.graph.singleton(slot{region: substitution.freshObject("fresh:" + target.Origin + "#" + strconv.Itoa(target.Object))}, false), true
+		return substitution.graph.singleton(substitution.freshObject("fresh:"+target.Origin+"#"+strconv.Itoa(target.Object)).at(""), false), true
 	case HeapTargetSlot:
 		if target.Slot.Path == "" {
 			return substitution.slots(target.Slot), true
@@ -301,7 +301,7 @@ func (substitution *heapSubstitution) results(call *ssa.Call) {
 	for index := range count {
 		set := substitution.returned[index]
 		if set.isNil() {
-			set = pointeesOf(slot{region: substitution.freshObject("result:" + strconv.Itoa(index))}, false)
+			set = pointeesOf(substitution.freshObject("result:"+strconv.Itoa(index)).at(""), false)
 		}
 		if count == 1 {
 			substitution.graph.values[call] = set.clone()

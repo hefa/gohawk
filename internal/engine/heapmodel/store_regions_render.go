@@ -207,7 +207,7 @@ func regionName(object *region) string {
 		}
 		return name
 	case regionPlaceholder:
-		return fmt.Sprintf("content(%s %s @%d.%d)", regionName(object.source.region), object.source.path, object.stamp.epoch, object.stamp.step)
+		return fmt.Sprintf("content(%s %s @%d.%d)", regionName(regionOf(object.source)), object.source.path, object.stamp.epoch, object.stamp.step)
 	case regionSnapshot:
 		return "copy:" + object.origin.Name()
 	case regionClosure:
@@ -247,9 +247,9 @@ func (object *region) orderKey() string {
 	key.WriteString("|")
 	key.WriteString(object.label)
 	key.WriteString("|")
-	if object.source.region != nil {
+	if regionOf(object.source) != nil {
 		key.WriteString("(")
-		key.WriteString(object.source.region.orderKey())
+		key.WriteString(regionOf(object.source).orderKey())
 		key.WriteString(")")
 		key.WriteString(object.source.path)
 	}

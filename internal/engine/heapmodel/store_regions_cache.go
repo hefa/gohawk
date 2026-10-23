@@ -224,3 +224,22 @@ func heapSummariesEqual(left, right HeapSummary) bool {
 		slices.Equal(left.Holds, right.Holds) && slices.Equal(left.Reads, right.Reads) &&
 		slices.Equal(left.Requires, right.Requires) && slices.Equal(left.Truncated, right.Truncated)
 }
+
+func valueFunction(value ssa.Value) *ssa.Function {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case ssa.Instruction:
+		// An instruction outside any block, such as one a test built by
+		// hand, belongs to no function.
+		if typed.Block() == nil {
+			return nil
+		}
+		return typed.Parent()
+	case *ssa.Parameter:
+		return typed.Parent()
+	case *ssa.FreeVar:
+		return typed.Parent()
+	}
+	return nil
+}

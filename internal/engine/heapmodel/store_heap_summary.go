@@ -209,7 +209,7 @@ func (projection *heapProjection) rootOf(object *region) (HeapSlot, bool) {
 		return HeapSlot{Root: root}, true
 	}
 	if object.kind == regionPlaceholder {
-		source, ok := projection.rootOf(object.source.region)
+		source, ok := projection.rootOf(regionOf(object.source))
 		if !ok {
 			return HeapSlot{}, false
 		}
@@ -228,8 +228,8 @@ func (projection *heapProjection) targetOf(pointee slot) HeapTarget {
 	case regionSnapshot:
 		// A copy of a named object's value is that value from outside: the
 		// caller holds it at the slot the copy was taken from.
-		if pointee.path == "" && pointee.region.source.region != nil {
-			if named, ok := projection.rootOf(pointee.region.source.region); ok {
+		if pointee.path == "" && regionOf(pointee.region.source) != nil {
+			if named, ok := projection.rootOf(regionOf(pointee.region.source)); ok {
 				return HeapTarget{Kind: HeapTargetSlot, Slot: HeapSlot{Root: named.Root, Path: joinSlotPath(named.Path, pointee.region.source.path)}}
 			}
 		}
@@ -578,7 +578,7 @@ func (projection *heapProjection) truncated(states []*regionState) []HeapSlot {
 			continue
 		}
 		for object, root := range projection.roots {
-			if root.Kind == HeapGlobal || state.escapes[slot{region: object}]&unknownReach != 0 {
+			if root.Kind == HeapGlobal || state.escapes[object.at("")]&unknownReach != 0 {
 				seen[HeapSlot{Root: root}] = true
 			}
 		}

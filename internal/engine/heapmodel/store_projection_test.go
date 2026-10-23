@@ -321,7 +321,7 @@ func assertEmbeddedFieldSetupCutoff(t *testing.T, address ssa.Value) {
 func TestOrderedSlotsPreservesPublicationOrder(t *testing.T) {
 	first := &region{serial: 1}
 	second := &region{serial: 2}
-	want := []slot{{region: first, path: "field:10"}, {region: first, path: "field:2"}, {region: second}}
+	want := []slot{first.at("field:10"), first.at("field:2"), second.at("")}
 	entries := map[slot]bool{want[2]: true, want[1]: false, want[0]: true}
 	before := maps.Clone(entries)
 	if got := orderedSlots(entries); !slices.Equal(got, want) {
@@ -337,7 +337,7 @@ func TestOrderedSlotsPreservesPublicationOrder(t *testing.T) {
 
 func TestBoundedSlotPreservesRenderedPaths(t *testing.T) {
 	root := &region{kind: regionExternal}
-	placeholder := &region{kind: regionPlaceholder, source: slot{region: root, path: "field:0/field:1"}}
+	placeholder := &region{kind: regionPlaceholder, source: root.at("field:0/field:1")}
 	projection := &heapProjection{roots: map[*region]HeapRoot{root: {Kind: HeapParameter, Index: 2}}}
 	for _, test := range []struct {
 		name   string
@@ -345,14 +345,14 @@ func TestBoundedSlotPreservesRenderedPaths(t *testing.T) {
 		path   string
 		ok     bool
 	}{
-		{"root", slot{region: root}, "", true},
-		{"limit", slot{region: root, path: "field:0/field:1/field:2"}, "field:0/field:1/field:2", true},
-		{"beyond", slot{region: root, path: "field:0/field:1/field:2/field:3"}, "", false},
-		{"placeholder limit", slot{region: placeholder, path: "field:2"}, "field:0/field:1/field:2", true},
-		{"placeholder beyond", slot{region: placeholder, path: "field:2/field:3"}, "", false},
-		{"empty steps at limit", slot{region: root, path: "//"}, "//", true},
-		{"empty steps beyond", slot{region: root, path: "///"}, "", false},
-		{"unnamed", slot{region: &region{kind: regionSite}}, "", false},
+		{"root", root.at(""), "", true},
+		{"limit", root.at("field:0/field:1/field:2"), "field:0/field:1/field:2", true},
+		{"beyond", root.at("field:0/field:1/field:2/field:3"), "", false},
+		{"placeholder limit", placeholder.at("field:2"), "field:0/field:1/field:2", true},
+		{"placeholder beyond", placeholder.at("field:2/field:3"), "", false},
+		{"empty steps at limit", root.at("//"), "//", true},
+		{"empty steps beyond", root.at("///"), "", false},
+		{"unnamed", (&region{kind: regionSite}).at(""), "", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, ok := projection.boundedSlot(test.target)
@@ -374,7 +374,7 @@ func BenchmarkOrderedSlots(b *testing.B) {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			entries := make(map[slot]bool, size)
 			for index := range size {
-				entries[slot{region: &region{serial: size - index}}] = false
+				entries[(&region{serial: size - index}).at("")] = false
 			}
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -393,7 +393,7 @@ func BenchmarkBoundedSlot(b *testing.B) {
 			root := &region{kind: regionExternal}
 			projection := &heapProjection{roots: map[*region]HeapRoot{root: {Kind: HeapParameter}}}
 			path := strings.TrimSuffix(strings.Repeat("field:0/", depth), "/")
-			target := slot{region: root, path: path}
+			target := root.at(path)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {

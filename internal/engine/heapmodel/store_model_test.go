@@ -225,9 +225,9 @@ func body() { p := new(int); opaque(p) }
 	instruction := graph.applied[0].instruction
 	// Two visits of one site are one loss; a different slot is another.
 	graph.widened = []widening{
-		{target: slot{region: graph.unkR}, at: instruction, size: 33},
-		{target: slot{region: graph.unkR}, at: instruction, size: 34},
-		{target: slot{region: graph.nilR}, at: instruction, size: 33},
+		{target: graph.unkR.at(""), at: instruction, size: 33},
+		{target: graph.unkR.at(""), at: instruction, size: 34},
+		{target: graph.nilR.at(""), at: instruction, size: 33},
 	}
 	first := CachedGraphEvidence(function)
 	if !first.Cached || first.Building || first.BuildReason != GraphBuildComplete || first.Widenings != 2 || len(first.Calls) != 1 {

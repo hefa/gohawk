@@ -16,6 +16,16 @@ import (
 // a callee's summary was not yet available shows the call as unsummarized,
 // which is how a trace exposes a summary that arrived too late.
 
+// appliedSummary is one summary application, for the dump.
+type appliedSummary struct {
+	instruction ssa.Instruction
+	callee      *ssa.Function
+	reason      CallApplicationReason
+	edges       int
+	effects     int
+	truncated   int
+}
+
 // CallApplicationReason names how the graph treated a call.
 type CallApplicationReason uint8
 

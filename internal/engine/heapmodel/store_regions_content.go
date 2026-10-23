@@ -39,13 +39,13 @@ const maxContentHops = 64
 // https://github.com/golang/freetype/tree/e2365dfdc4a0/truetype
 func (graph *regionGraph) contentFollowing(state *regionState, target slot, path []slot) pointees {
 	if len(path) >= maxContentHops || slices.Contains(path, target) {
-		return pointeesOf(slot{region: graph.unkR}, false)
+		return pointeesOf(graph.unkR.at(""), false)
 	}
 	if target.region.kind == regionUnknown {
 		return pointeesOf(target, false)
 	}
 	if target.region.kind == regionNil {
-		return pointeesOf(slot{region: graph.nilR}, false)
+		return pointeesOf(graph.nilR.at(""), false)
 	}
 	// Unwritten reads return their own set. Allocate a merge result only
 	// when stored evidence contributes or a dynamic read needs a union.
@@ -92,10 +92,10 @@ func (graph *regionGraph) unwritten(state *regionState, target slot, path []slot
 		return pointeesOf(member, false)
 	}
 	if backing, rest, ok := graph.backingOf(state, target); ok {
-		return graph.contentFollowing(state, slot{region: backing, path: rest}, append(path, target))
+		return graph.contentFollowing(state, backing.at(rest), append(path, target))
 	}
 	source := target.region.source
-	return graph.contentFollowing(state, slot{region: source.region, path: joinSlotPath(source.path, target.path)}, append(path, target))
+	return graph.contentFollowing(state, source.region.at(joinSlotPath(source.path, target.path)), append(path, target))
 }
 
 // unwrittenSole returns the one object an unwritten slot holds, unless the
@@ -103,32 +103,32 @@ func (graph *regionGraph) unwritten(state *regionState, target slot, path []slot
 // resolves by reading that slot instead.
 func (graph *regionGraph) unwrittenSole(state *regionState, target slot) (slot, bool) {
 	if stamp, ok := graph.clobberedBeneath(state, target); ok {
-		return slot{region: graph.placeholder(target, versionStamp{epoch: stamp})}, true
+		return graph.placeholder(target, versionStamp{epoch: stamp}).at(""), true
 	}
 	if _, _, ok := graph.backingOf(state, target); ok {
-		return slot{}, false
+		return nil, false
 	}
 	switch target.region.kind {
 	case regionSite:
-		return slot{region: graph.nilR}, true
+		return graph.nilR.at(""), true
 	case regionSnapshot:
 		source := target.region.source
 		switch {
-		case source.region == nil:
-			return slot{region: graph.unkR}, true
+		case source == nil:
+			return graph.unkR.at(""), true
 		case source.region.kind == regionSnapshot:
-			return slot{}, false
+			return nil, false
 		case source.region.kind == regionSite:
-			return slot{region: graph.nilR}, true
+			return graph.nilR.at(""), true
 		}
-		origin := slot{region: source.region, path: joinSlotPath(source.path, target.path)}
+		origin := source.region.at(joinSlotPath(source.path, target.path))
 		stamp := versionStamp{epoch: target.region.stamp.epoch, step: target.region.stamps[stepKey(origin.path)]}
-		return slot{region: graph.placeholder(origin, stamp)}, true
+		return graph.placeholder(origin, stamp).at(""), true
 	case regionExternal, regionOpaque, regionPlaceholder, regionClosure:
-		return slot{region: graph.placeholder(target, graph.stampOf(state, target))}, true
+		return graph.placeholder(target, graph.stampOf(state, target)).at(""), true
 	case regionNil, regionUnknown:
 	}
-	return slot{region: graph.unkR}, true
+	return graph.unkR.at(""), true
 }
 
 // contentView is content for a caller that only reads the answer. When the
@@ -162,11 +162,11 @@ func (graph *regionGraph) contentSole(state *regionState, target slot) (slot, bo
 	case regionUnknown:
 		return target, true
 	case regionNil:
-		return slot{region: graph.nilR}, true
+		return graph.nilR.at(""), true
 	case regionSite, regionExternal, regionOpaque, regionPlaceholder, regionSnapshot, regionClosure:
 	}
 	if state.contents[target].Len() > 0 || graph.wildcardContributes(state, target) {
-		return slot{}, false
+		return nil, false
 	}
 	return graph.unwrittenSole(state, target)
 }
@@ -200,7 +200,7 @@ type singletonKey struct {
 }
 
 func (graph *regionGraph) starSlot(target slot) slot {
-	return slot{region: target.region, path: joinSlotPath(parentPath(target.path), pathStar)}
+	return target.region.at(joinSlotPath(parentPath(target.path), pathStar))
 }
 
 func parentPath(path string) string {
@@ -215,14 +215,14 @@ func parentPath(path string) string {
 // clobbers of that prefix, so the placeholder a read produces does not
 // depend on the order the clobbers are visited in.
 func (graph *regionGraph) clobberedBeneath(state *regionState, target slot) (int, bool) {
-	best, found := slot{}, false
+	var best slot
+	found := false
 	stamp := 0
 	for prefix, candidate := range state.clobbered {
 		if prefix.region != target.region || !slotBeneath(target.path, prefix.path) {
 			continue
 		}
-		closer := len(prefix.path) > len(best.path) || len(prefix.path) == len(best.path) && candidate > stamp
-		if !found || closer {
+		if !found || len(prefix.path) > len(best.path) || len(prefix.path) == len(best.path) && candidate > stamp {
 			best, stamp, found = prefix, candidate, true
 		}
 	}
@@ -234,7 +234,7 @@ func (graph *regionGraph) clobberedBeneath(state *regionState, target slot) (int
 func (graph *regionGraph) backingOf(state *regionState, target slot) (*region, string, bool) {
 	path := target.path
 	for {
-		if backing, ok := state.backing[slot{region: target.region, path: path}]; ok {
+		if backing, ok := state.backing[target.region.at(path)]; ok {
 			// A nonempty prefix leaves a separating slash. The snapshot uses
 			// relative paths; keeping that slash names a different source slot
 			// and loses identity for an unchanged nested copy.
@@ -251,22 +251,22 @@ func (graph *regionGraph) backingOf(state *regionState, target slot) (*region, s
 // snapshot region for the loaded value.
 func (graph *regionGraph) snapshotOf(state *regionState, addresses pointees, loaded ssa.Value) pointees {
 	snapshot := graph.snapshot(loaded)
-	graph.clearSubtree(state, slot{region: snapshot})
+	graph.clearSubtree(state, snapshot.at(""))
 	stamp := 0
 	if instruction, ok := loaded.(ssa.Instruction); ok {
 		stamp = graph.id(instruction)
 	}
 	if addresses.Len() != 1 || addresses.unknown() {
-		state.mutableClobbered()[slot{region: snapshot}] = stamp
-		return pointeesOf(slot{region: snapshot}, false)
+		state.mutableClobbered()[snapshot.at("")] = stamp
+		return pointeesOf(snapshot.at(""), false)
 	}
 	for address, stale := range addresses.all() {
 		if lastStep(address.path) == pathStar {
-			state.mutableClobbered()[slot{region: snapshot}] = stamp
+			state.mutableClobbered()[snapshot.at("")] = stamp
 			graph.selectedSnapshot(state, address, stale, loaded, snapshot)
-			return pointeesOf(slot{region: snapshot}, stale)
+			return pointeesOf(snapshot.at(""), stale)
 		}
-		graph.copySubtree(state, address, slot{region: snapshot})
+		graph.copySubtree(state, address, snapshot.at(""))
 		snapshot.source = address
 		// The copy reads its source's unwritten slots as the placeholders
 		// a load there would produce now, stamped by the last effect that
@@ -274,11 +274,11 @@ func (graph *regionGraph) snapshotOf(state *regionState, addresses pointees, loa
 		snapshot.stamp = versionStamp{epoch: graph.stampOf(state, address).epoch}
 		snapshot.stamps = maps.Clone(state.stepEpochs)
 		if clobber, ok := graph.clobberedBeneath(state, address); ok {
-			state.mutableClobbered()[slot{region: snapshot}] = clobber
+			state.mutableClobbered()[snapshot.at("")] = clobber
 		}
-		return pointeesOf(slot{region: snapshot}, stale)
+		return pointeesOf(snapshot.at(""), stale)
 	}
-	return pointeesOf(slot{region: snapshot}, false)
+	return pointeesOf(snapshot.at(""), false)
 }
 
 // copySubtree copies every entry beneath source to the same path beneath
@@ -289,7 +289,7 @@ func (graph *regionGraph) copySubtree(state *regionState, source, destination sl
 			continue
 		}
 		rest := target.path[len(source.path):]
-		copied := slot{region: destination.region, path: joinSlotPath(destination.path, trimSlash(rest))}
+		copied := destination.region.at(joinSlotPath(destination.path, trimSlash(rest)))
 		state.contents[copied] = set.clone()
 		graph.remember(copied, set)
 	}
@@ -312,7 +312,7 @@ func copySlotMetadata[T any](entries map[slot]T, source, destination slot) {
 			continue
 		}
 		rest := target.path[len(source.path):]
-		entries[slot{region: destination.region, path: joinSlotPath(destination.path, trimSlash(rest))}] = value
+		entries[destination.region.at(joinSlotPath(destination.path, trimSlash(rest)))] = value
 	}
 }
 
@@ -322,8 +322,8 @@ func (graph *regionGraph) snapshotBeneath(snapshot *region, path string) *region
 	if path == "" {
 		return snapshot
 	}
-	nested := graph.intern(regionKey{kind: regionSnapshot, origin: snapshot.origin, source: slot{region: snapshot, path: path}})
-	nested.source = slot{region: snapshot, path: path}
+	nested := graph.intern(regionKey{kind: regionSnapshot, origin: snapshot.origin, source: snapshot.at(path)})
+	nested.source = snapshot.at(path)
 	return nested
 }
 
@@ -353,7 +353,7 @@ func (graph *regionGraph) forgetWholeAbove(state *regionState, target slot) {
 		return
 	}
 	for path := parentPath(target.path); ; path = parentPath(path) {
-		delete(state.contents, slot{region: target.region, path: path})
+		delete(state.contents, target.region.at(path))
 		if path == "" {
 			return
 		}
@@ -415,7 +415,7 @@ func (graph *regionGraph) remember(target slot, value pointees) {
 		held.add(object, stale)
 		if held.Len() > pointeeLimit {
 			held.clearAll()
-			held.put(slot{region: graph.unkR}, false)
+			held.put(graph.unkR.at(""), false)
 			return
 		}
 	}

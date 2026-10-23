@@ -295,7 +295,7 @@ func (graph *regionGraph) everHeld(placeholder, target slot, depth int) bool {
 			continue
 		}
 		for pointee := range set.all() {
-			pointee.path = joinSlotPath(pointee.path, placeholder.path)
+			pointee = pointee.region.at(joinSlotPath(pointee.path, placeholder.path))
 			if pointee.region.kind == regionUnknown {
 				return true
 			}
@@ -344,15 +344,15 @@ func (graph *regionGraph) mustSame(left, right ssa.Value) bool {
 // singleSlot returns the one non-stale, non-unknown slot of a set.
 func singleSlot(set pointees) (slot, bool) {
 	if set.Len() != 1 {
-		return slot{}, false
+		return nil, false
 	}
 	for target, stale := range set.all() {
 		if stale || target.region.kind == regionUnknown || lastStep(target.path) == pathStar {
-			return slot{}, false
+			return nil, false
 		}
 		return target, true
 	}
-	return slot{}, false
+	return nil, false
 }
 
 // contentAt returns what the addressed slots hold when the instruction runs.
@@ -450,7 +450,7 @@ func (graph *regionGraph) valueAtPath(root ssa.Value, path []string, at ssa.Inst
 	if !ok {
 		return nil, false
 	}
-	target := slot{region: base.region, path: joinSlotPath(base.path, ssaflow.JoinAccessPath(path))}
+	target := base.region.at(joinSlotPath(base.path, ssaflow.JoinAccessPath(path)))
 	held, ok := singleSlot(graph.contentView(state, target))
 	if !ok {
 		return nil, false

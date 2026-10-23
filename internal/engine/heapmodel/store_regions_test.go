@@ -360,11 +360,11 @@ func TestRegionGraphRejectsChangedSummary(t *testing.T) {
 func TestRegionHistoryWidensConservatively(t *testing.T) {
 	owner := &region{kind: regionSite}
 	unknown := &region{kind: regionUnknown}
-	held := slot{region: owner, path: "field:0"}
+	held := owner.at("field:0")
 	graph := &regionGraph{history: map[slot]pointees{}, unkR: unknown}
 	objects := make([]slot, pointeeLimit+1)
 	for index := range objects {
-		objects[index] = slot{region: &region{kind: regionSite, serial: index}}
+		objects[index] = (&region{kind: regionSite, serial: index}).at("")
 		graph.remember(held, pointeesOf(objects[index], false))
 		if index == pointeeLimit-1 && graph.history[held].Len() != pointeeLimit {
 			t.Fatalf("history below limit has %d objects, want %d", graph.history[held].Len(), pointeeLimit)
@@ -377,11 +377,11 @@ func TestRegionHistoryWidensConservatively(t *testing.T) {
 	if got := graph.history[held]; got.Len() != 1 || !got.unknown() {
 		t.Fatalf("widened history grew again: %v", got)
 	}
-	from, target := pointeesOf(slot{region: owner}, false), pointeesOf(objects[0], false)
+	from, target := pointeesOf(owner.at(""), false), pointeesOf(objects[0], false)
 	if !containsThroughSlots(graph.history, from, target) {
 		t.Fatal("widened slot history must admit possible transitive containment")
 	}
-	if !graph.everContainedUnlocked(slot{region: owner}, pointeesOf(objects[0], false), nil) {
+	if !graph.everContainedUnlocked(owner.at(""), pointeesOf(objects[0], false), nil) {
 		t.Fatal("unknown history must admit possible containment")
 	}
 }
@@ -546,7 +546,7 @@ func (graph *regionGraph) contentIsNil(root ssa.Value, path []string, at ssa.Ins
 			currentType = pointer.Elem()
 		}
 		for _, step := range path[:len(path)-1] {
-			target.path = joinSlotPath(target.path, step)
+			target = target.region.at(joinSlotPath(target.path, step))
 			fieldType, ok := selectedFieldType(currentType, step)
 			if !ok {
 				return false
@@ -565,9 +565,9 @@ func (graph *regionGraph) contentIsNil(root ssa.Value, path []string, at ssa.Ins
 				return false
 			}
 		}
-		target.path = joinSlotPath(target.path, path[len(path)-1])
+		target = target.region.at(joinSlotPath(target.path, path[len(path)-1]))
 	} else {
-		target.path = joinSlotPath(target.path, ssaflow.JoinAccessPath(path))
+		target = target.region.at(joinSlotPath(target.path, ssaflow.JoinAccessPath(path)))
 	}
 	held, ok := singleSlot(graph.content(state, target))
 	return ok && held.region.kind == regionNil
