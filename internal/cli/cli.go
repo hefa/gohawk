@@ -6,6 +6,7 @@ import (
 	"flag"
 	"io"
 	"os"
+	goruntime "runtime"
 	"slices"
 	"strings"
 
@@ -94,6 +95,21 @@ func Main() int {
 	return 0
 }
 
+// unitThreads bounds the threads one go vet unit runs Go code on. go vet
+// already runs as many units at once as the machine has CPUs, so a unit that
+// also takes every CPU starts that many threads and GC workers of its own for
+// CPUs the other units are using. On caddy, containerd and moby four threads
+// a unit allocated 5 to 6 percent less, with no slower wall time; two
+// allocated less still but made the largest units the long pole.
+const unitThreads = 4
+
+// limitUnitThreads applies unitThreads unless the user chose GOMAXPROCS.
+func limitUnitThreads(getenv func(string) string) {
+	if getenv("GOMAXPROCS") == "" {
+		goruntime.GOMAXPROCS(min(goruntime.GOMAXPROCS(0), unitThreads))
+	}
+}
+
 // prepareUnit adjusts the analyzers for the go vet unit named by arguments.
 // The fact passes that run are ordered one after another. A facts-only unit
 // skips analyzers whose only output is diagnostics, which go vet would
@@ -107,6 +123,7 @@ func prepareUnit(arguments []string, analyzers []*analysis.Analyzer, runtime cli
 	if err != nil {
 		return err
 	}
+	limitUnitThreads(runtime.getenv)
 	// The fact passes share the heap model's process-wide registry and graph
 	// cache; running them concurrently made the facts they publish depend on
 	// scheduling. Lifecycle inference registers the summaries the others read.

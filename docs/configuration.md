@@ -102,6 +102,14 @@ project. Choose what runs with the selection flags above.
 gohawk reports problems and their source locations. It does not offer or apply
 source edits; choose the appropriate correction for your code.
 
+## Parallelism
+
+`go vet` analyzes as many packages at once as the machine has CPUs, one
+process each. gohawk runs each of those processes on at most four threads, so
+the processes do not each start threads for every CPU the others are using.
+Set `GOMAXPROCS` to choose the per-package thread count yourself; note that it
+also sets how many packages `go vet` analyzes at once.
+
 ## Ignore an intentional finding
 
 Put an ignore comment on the flagged line or the line above it:
