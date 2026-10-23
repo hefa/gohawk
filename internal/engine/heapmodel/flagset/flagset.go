@@ -19,8 +19,9 @@ import (
 const Inline = 2
 
 // Spilled is how many members a spilled block holds before it moves them
-// to a map: as many as one flag byte has bits.
-const Spilled = 8
+// to a map, one flag bit each. Building the graphs of two standard packages
+// allocated least with sixteen, against four, eight or thirty-two.
+const Spilled = 16
 
 // Set is a set of keys with a flag each. Its zero value is empty and ready
 // to use; reads through a nil *Set see an empty set. A Set holds its members
@@ -40,7 +41,7 @@ type Set[K comparable] struct {
 type spilled[K comparable] struct {
 	keys  [Spilled]K
 	count uint8
-	flags uint8
+	flags uint16
 	many  map[K]bool
 }
 
@@ -125,7 +126,7 @@ func (set *Set[K]) setFlag(index int, flag bool) {
 }
 
 func (set *Set[K]) spillAll() {
-	spill := &spilled[K]{count: set.count, flags: set.flags}
+	spill := &spilled[K]{count: set.count, flags: uint16(set.flags)}
 	copy(spill.keys[:], set.inline[:set.count])
 	*set = Set[K]{spill: spill, version: set.version}
 }
