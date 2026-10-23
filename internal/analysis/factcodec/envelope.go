@@ -1,7 +1,6 @@
 package factcodec
 
 import (
-	"bytes"
 	"fmt"
 	"sync"
 )
@@ -81,13 +80,18 @@ func (envelope *Envelope[T]) GobEncode() ([]byte, error) {
 }
 
 // GobDecode accepts an encoding after its framing checks and defers the full
-// validating decode to Value. It replaces the envelope only on success; gob
-// reuses data's storage, so the envelope keeps a copy.
+// validating decode to Value. It replaces the envelope only on success.
+//
+// The envelope keeps data itself rather than a copy. gob reads each message
+// into a buffer of its own and hands a GobDecoder a slice of it that it never
+// writes again; copying every imported payload was a tenth of all the bytes
+// a vet unit allocated. TestEnvelopeKeepsGobBufferSafely pins that behavior.
+// A caller outside gob must not change data afterwards.
 func (envelope *Envelope[T]) GobDecode(data []byte) error {
 	if err := checkFraming(data); err != nil {
 		return err
 	}
-	state := &envelopeState[T]{data: bytes.Clone(data)}
+	state := &envelopeState[T]{data: data}
 	state.encodeOnce.Do(func() {})
 	*envelope = Envelope[T]{state: state}
 	return nil

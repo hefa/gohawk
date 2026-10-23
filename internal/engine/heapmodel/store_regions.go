@@ -471,6 +471,10 @@ func (graph *regionGraph) entryState(block *ssa.BasicBlock, out map[*ssa.BasicBl
 	if block == graph.function.Blocks[0] {
 		return graph.entry[block]
 	}
+	if shared := soleForwardEntry(block, out); shared != nil {
+		graph.entry[block] = shared
+		return shared
+	}
 	var merged *regionState
 	for _, predecessor := range block.Preds {
 		state, ok := out[predecessor]
@@ -491,6 +495,29 @@ func (graph *regionGraph) entryState(block *ssa.BasicBlock, out map[*ssa.BasicBl
 	}
 	graph.entry[block] = merged
 	return merged
+}
+
+// soleForwardEntry returns the out state of a block's only reached
+// predecessor when no back edge enters the block. Its entry is then that
+// state unchanged, so it is shared rather than cloned: nothing writes an out
+// state once stored, the transfer works on its own clone, and a block a back
+// edge enters, whose entry widening may change, never shares.
+func soleForwardEntry(block *ssa.BasicBlock, out map[*ssa.BasicBlock]*regionState) *regionState {
+	var sole *regionState
+	for _, predecessor := range block.Preds {
+		if block.Dominates(predecessor) {
+			return nil
+		}
+		state, ok := out[predecessor]
+		if !ok {
+			continue
+		}
+		if sole != nil {
+			return nil
+		}
+		sole = state
+	}
+	return sole
 }
 
 // stateAt replays the block's entry state up to, but not including, the

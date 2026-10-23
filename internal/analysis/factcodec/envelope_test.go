@@ -2,6 +2,7 @@ package factcodec
 
 import (
 	"bytes"
+	"encoding/gob"
 	"reflect"
 	"sync"
 	"testing"
@@ -113,6 +114,35 @@ func TestEnvelopeReexportsImportedBytes(t *testing.T) {
 		if encoded, err := envelope.GobEncode(); err != nil || !bytes.Equal(encoded, data) {
 			t.Fatalf("re-exported %x, %v; want %x", encoded, err, data)
 		}
+	}
+}
+
+// TestEnvelopeKeepsGobBufferSafely pins the gob behavior GobDecode relies on to
+// keep a payload without copying it: decoding later messages from the same
+// stream leaves an earlier envelope's bytes intact.
+func TestEnvelopeKeepsGobBufferSafely(t *testing.T) {
+	var stream bytes.Buffer
+	encoder := gob.NewEncoder(&stream)
+	first := testPayload{Mask: 1, Items: []int{1, 2, 3}}
+	for _, value := range []testPayload{first, {Mask: 2, Names: map[string]int{"overwrite": 9}}, {Mask: 3}} {
+		envelope := Wrap(value)
+		if err := encoder.Encode(&envelope); err != nil {
+			t.Fatal(err)
+		}
+	}
+	decoder := gob.NewDecoder(&stream)
+	var kept Envelope[testPayload]
+	if err := decoder.Decode(&kept); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		var later Envelope[testPayload]
+		if err := decoder.Decode(&later); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := mustValue(t, &kept); !reflect.DeepEqual(got, first) {
+		t.Fatalf("kept envelope changed after later decodes: %#v", got)
 	}
 }
 
