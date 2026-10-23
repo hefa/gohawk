@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"go/token"
 	"go/types"
+	"sync"
 
 	"github.com/kojah/gohawk/internal/engine/heapmodel"
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
@@ -38,6 +39,7 @@ func ReturnedValueOwnsValueSummarized(returned *ssa.Return, value ssa.Value, sum
 // this model found no owner. Graph/type and summary-hook internals remain separate.
 func ProveReturnedOwnershipWithin(returned *ssa.Return, value ssa.Value, summarized ReturnsOwner, budget *proofs.SearchBudget) proofs.Proof {
 	search := newOwnershipSearch(summarized)
+	defer search.release()
 	search.budget = budget
 	found := search.returnedValueOwnsValue(returned, value)
 	if search.exhausted() {
@@ -58,8 +60,23 @@ type ownershipSearch struct {
 	budget     *proofs.SearchBudget
 }
 
+// ownershipSearches reuses searches and their cycle guards. A search lives
+// for one query, and its guard grew a map from nothing every time, most of
+// what the search allocated; a cleared map keeps its buckets. A search only
+// asks whether a pair was seen, never which, so reuse changes no answer.
+var ownershipSearches = sync.Pool{New: func() any { return &ownershipSearch{seen: map[ownershipPair]bool{}} }}
+
+// newOwnershipSearch returns a search for one query; release returns it.
 func newOwnershipSearch(summarized ReturnsOwner) *ownershipSearch {
-	return &ownershipSearch{seen: map[ownershipPair]bool{}, summarized: summarized}
+	search, _ := ownershipSearches.Get().(*ownershipSearch)
+	search.summarized = summarized
+	return search
+}
+
+func (search *ownershipSearch) release() {
+	clear(search.seen)
+	search.summarized, search.budget = nil, nil
+	ownershipSearches.Put(search)
 }
 
 func (search *ownershipSearch) exhausted() bool {

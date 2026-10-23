@@ -258,9 +258,11 @@ func proveContainmentWithin(owner, value ssa.Value, budget *proofs.SearchBudget,
 		search := newOwnershipSearch(nil)
 		search.budget = budget
 		found = valueOwnsValueWithin(owner, value, budget) || search.aggregateStoresValue(owner, value)
+		exhausted := search.exhausted()
+		search.release()
 		// Graph containment adds copies, merges and captured cells; visible
 		// constructors remain the recursive search's responsibility.
-		if !found && !search.exhausted() && budget.Spend() {
+		if !found && !exhausted && budget.Spend() {
 			found = graphContains()
 		}
 	}
