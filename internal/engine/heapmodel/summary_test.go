@@ -137,7 +137,7 @@ func summarySortInputs(size int) ([]HeapHold, []HeapEdge, []HeapEffect, []requir
 		}
 		effects[index] = HeapEffect{Slot: at, Escape: HeapEscape(index % 3), Release: strconv.Itoa(index % 2), Every: index/12%2 == 0}
 		requirements[index] = requirementCandidate{
-			key:         requirementKey{slot: (&region{serial: index % 3}).at(strconv.Itoa(index % 2))},
+			key:         requirementKey{slot: (&region{serial: int32(index % 3)}).at(strconv.Itoa(index % 2))},
 			requirement: HeapRequirement{Slot: at, Kind: HeapRequirementKind(index % 2), Method: strconv.Itoa(index % 3)},
 		}
 	}

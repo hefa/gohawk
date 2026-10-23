@@ -2,6 +2,7 @@ package heapmodel
 
 import (
 	"iter"
+	"math"
 	"strings"
 	"sync"
 
@@ -49,7 +50,6 @@ const (
 // region is one abstract object. Regions are interned per graph, so identity
 // is pointer identity.
 type region struct {
-	kind   regionKind
 	origin ssa.Value
 	// source and stamp identify a placeholder: the slot it stands for and
 	// the write stamp of that slot when it was read. A snapshot keeps the
@@ -64,7 +64,10 @@ type region struct {
 	// serial is the region's creation order within its graph. It breaks a
 	// tie in compareRegions only, because queries intern regions in the
 	// order consumers ask them; order caches the region's ordering key.
-	serial int
+	// serial and kind share a word, which keeps a region in the 128-byte
+	// size class.
+	serial int32
+	kind   regionKind
 	order  string
 	// whole is the read-only set holding just this object, for singleton.
 	whole pointees
@@ -422,7 +425,8 @@ func (graph *regionGraph) intern(key regionKey) *region {
 	if existing, ok := graph.regions[key]; ok {
 		return existing
 	}
-	created := &region{kind: key.kind, origin: key.origin, source: key.source, stamp: key.stamp, label: key.label, serial: len(graph.regions)}
+	serial := int32(min(len(graph.regions), math.MaxInt32))
+	created := &region{kind: key.kind, origin: key.origin, source: key.source, stamp: key.stamp, label: key.label, serial: serial}
 	graph.regions[key] = created
 	return created
 }

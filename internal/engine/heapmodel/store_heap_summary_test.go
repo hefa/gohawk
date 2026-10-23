@@ -480,7 +480,7 @@ func TestBoundedRequirements(t *testing.T) {
 		candidates := make([]requirementCandidate, heapRequirementProofLimit+1)
 		for index := range candidates {
 			candidates[index] = requirementCandidate{
-				key: requirementKey{slot: (&region{kind: regionExternal, serial: index}).at("")},
+				key: requirementKey{slot: (&region{kind: regionExternal, serial: int32(index)}).at("")},
 				requirement: HeapRequirement{
 					Slot: HeapSlot{Root: HeapRoot{Kind: HeapParameter, Index: index}}, Kind: HeapRequiresNonNil,
 				},

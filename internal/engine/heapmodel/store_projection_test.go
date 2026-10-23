@@ -374,7 +374,7 @@ func BenchmarkOrderedSlots(b *testing.B) {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			entries := make(map[slot]bool, size)
 			for index := range size {
-				entries[(&region{serial: size - index}).at("")] = false
+				entries[(&region{serial: int32(size - index)}).at("")] = false
 			}
 			b.ReportAllocs()
 			b.ResetTimer()

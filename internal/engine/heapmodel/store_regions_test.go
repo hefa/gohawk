@@ -364,7 +364,7 @@ func TestRegionHistoryWidensConservatively(t *testing.T) {
 	graph := &regionGraph{history: map[slot]pointees{}, unkR: unknown}
 	objects := make([]slot, pointeeLimit+1)
 	for index := range objects {
-		objects[index] = (&region{kind: regionSite, serial: index}).at("")
+		objects[index] = (&region{kind: regionSite, serial: int32(index)}).at("")
 		graph.remember(held, pointeesOf(objects[index], false))
 		if index == pointeeLimit-1 && graph.history[held].Len() != pointeeLimit {
 			t.Fatalf("history below limit has %d objects, want %d", graph.history[held].Len(), pointeeLimit)
