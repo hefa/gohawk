@@ -83,6 +83,7 @@ type Engine struct {
 	mu        sync.Mutex
 	summaries *ssacall.FunctionSummaries[Summary]
 	imported  map[*types.Func]*publishedFact
+	groups    importedGroups
 }
 
 // NewEngine creates local-only result inference with no library-name guesses.

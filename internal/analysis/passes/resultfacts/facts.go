@@ -40,7 +40,7 @@ type publication = factcodec.Envelope[Fact]
 // analysis. It does not require lifecycle or concurrency inference.
 var Analyzer = &analysis.Analyzer{
 	Name: "resultfacts", Doc: "exports bounded unconditional result guarantees",
-	Requires: []*analysis.Analyzer{buildssa.Analyzer}, FactTypes: []analysis.Fact{new(publishedFact)},
+	Requires: []*analysis.Analyzer{buildssa.Analyzer}, FactTypes: []analysis.Fact{new(publishedFact), new(publishedMethods), new(publishedFunctions)},
 	ResultType: reflect.TypeFor[*Engine](), Run: run,
 }
 
@@ -59,7 +59,9 @@ func run(pass *analysis.Pass) (any, error) {
 			engine.imported[object] = published
 		}
 	}
+	engine.groups = importGroups(pass)
 	visible := factscope.API(pass.Pkg)
+	var groups factGroups
 	for _, function := range functions {
 		object := function.Object()
 		// A function with no results still has something to say when it
@@ -69,12 +71,19 @@ func run(pass *analysis.Pass) (any, error) {
 			continue
 		}
 		summary := engine.Function(function, proofs.NewSearchBudget(proofs.SummaryBudget))
-		if summary.Available && summary.claimsAnything() {
-			pass.ExportObjectFact(object, &publishedFact{factcodec.Wrap(Fact{
-				Version: factVersion, Results: slices.Clone(summary.results), Cases: slices.Clone(summary.cases), Returned: slices.Clone(summary.returned),
-				NeverReturns: summary.neverReturns,
-			})})
+		if !summary.Available || !summary.claimsAnything() {
+			continue
 		}
+		fact := Fact{
+			Version: factVersion, Results: slices.Clone(summary.results), Cases: slices.Clone(summary.cases), Returned: slices.Clone(summary.returned),
+			NeverReturns: summary.neverReturns,
+		}
+		if declared, ok := object.(*types.Func); !ok || !groups.add(declared, fact) {
+			pass.ExportObjectFact(object, &publishedFact{factcodec.Wrap(fact)})
+		}
+	}
+	if err := groups.publish(pass); err != nil {
+		return nil, err
 	}
 	return engine, nil
 }
@@ -99,12 +108,19 @@ func (summary Summary) claimsAnything() bool {
 // importedFact decodes the fact published for object. A fact that does not
 // decode or validate is unavailable, never an empty guarantee.
 func (engine *Engine) importedFact(object *types.Func) (Fact, bool) {
-	published, ok := engine.imported[object]
-	if !ok {
+	var fact Fact
+	if published, ok := engine.imported[object]; ok {
+		value, err := published.Value()
+		if err != nil {
+			return Fact{}, false
+		}
+		fact = value
+	} else if grouped, ok := engine.groups.lookup(object); ok {
+		fact = grouped
+	} else {
 		return Fact{}, false
 	}
-	fact, err := published.Value()
-	if err != nil || !validFact(&fact) {
+	if !validFact(&fact) {
 		return Fact{}, false
 	}
 	return fact, true

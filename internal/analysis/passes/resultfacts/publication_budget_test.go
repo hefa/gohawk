@@ -42,15 +42,41 @@ func HeavyPredicate(err error, sink *int) bool { ` + strings.Repeat("if err != n
 		publishedFacts := make(map[string]Fact)
 		// Observe the domain's actual publication boundary without forwarding
 		// facts to analysistest's golden matcher; wire-format tests are separate.
-		pass.ExportObjectFact = func(object types.Object, published analysis.Fact) {
-			if strings.HasPrefix(object.Name(), "Heavy") {
-				t.Errorf("interrupted %s inference must not publish a fact", object.Name())
+		record := func(name string, value Fact) {
+			if strings.HasPrefix(name, "Heavy") {
+				t.Errorf("interrupted %s inference must not publish a fact", name)
 			}
-			value, err := published.(*publishedFact).Value()
+			publishedFacts[name] = value
+		}
+		recordGroup := func(group groupPublication) {
+			value, err := group.Value()
 			if err != nil {
 				t.Fatal(err)
 			}
-			publishedFacts[object.Name()] = value
+			for _, name := range value.Names {
+				fact, ok := value.Lookup(name)
+				if !ok {
+					t.Fatalf("%s: grouped fact does not decode", name)
+				}
+				record(name, fact)
+			}
+		}
+		pass.ExportObjectFact = func(object types.Object, published analysis.Fact) {
+			switch published := published.(type) {
+			case *publishedFact:
+				value, err := published.Value()
+				if err != nil {
+					t.Fatal(err)
+				}
+				record(object.Name(), value)
+			case *publishedMethods:
+				recordGroup(published.groupPublication)
+			}
+		}
+		pass.ExportPackageFact = func(published analysis.Fact) {
+			if group, ok := published.(*publishedFunctions); ok {
+				recordGroup(group.groupPublication)
+			}
 		}
 		result, runErr := run(pass)
 		if runErr != nil {
