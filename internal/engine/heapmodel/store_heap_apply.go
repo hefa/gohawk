@@ -44,7 +44,7 @@ func (graph *regionGraph) applyHeapSummary(state *regionState, common *ssa.CallC
 		instruction: instruction, callee: callee, reason: CallSummaryApplied,
 		edges: len(summary.Edges), effects: len(summary.Effects), truncated: len(summary.Truncated),
 	})
-	substitution := &heapSubstitution{graph: graph, state: state, binding: binding, instruction: instruction, fresh: map[string]*region{}}
+	substitution := &heapSubstitution{graph: graph, state: state, binding: binding, instruction: instruction}
 	graph.applyEscapes(state, summary, substitution, instruction)
 	for _, at := range summary.Truncated {
 		substitution.truncate(at)
@@ -54,6 +54,9 @@ func (graph *regionGraph) applyHeapSummary(state *regionState, common *ssa.CallC
 	for _, edge := range summary.Edges {
 		if edge.Must && edge.From.Root.Kind == HeapResult && edge.From.Path == "" && edge.To.Kind == HeapTargetFresh {
 			object := substitution.freshObject("fresh:" + edge.To.Origin + "#" + strconv.Itoa(edge.To.Object))
+			if substitution.fresh == nil {
+				substitution.fresh = map[string]*region{}
+			}
 			substitution.fresh["result:"+strconv.Itoa(edge.From.Root.Index)] = object
 		}
 	}
@@ -105,7 +108,9 @@ type heapSubstitution struct {
 	state       *regionState
 	binding     heapCallBinding
 	instruction ssa.Instruction
-	// fresh interns the objects this call created, one per origin.
+	// fresh names the object a result stands for when the summary says it
+	// is one of the call's fresh objects; every other origin's object is
+	// the graph's, interned by the call and the origin.
 	fresh map[string]*region
 	// results collects each result's pointees.
 	returned map[int]pointees
@@ -168,9 +173,7 @@ func (substitution *heapSubstitution) freshObject(origin string) *region {
 		return object
 	}
 	value, _ := substitution.instruction.(ssa.Value)
-	object := substitution.graph.intern(regionKey{kind: regionOpaque, origin: value, label: origin})
-	substitution.fresh[origin] = object
-	return object
+	return substitution.graph.intern(regionKey{kind: regionOpaque, origin: value, label: origin})
 }
 
 // targets resolves what a summary target stands for in the caller, as a set
