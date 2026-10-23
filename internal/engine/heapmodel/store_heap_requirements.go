@@ -61,9 +61,8 @@ func (projection *heapProjection) requirements() []HeapRequirement {
 			}
 		}
 	}
-	truncated := map[HeapSlot]bool{}
-	for at := range projection.cuts {
-		truncated[at] = true
+	if len(keys) == 0 {
+		return nil
 	}
 	written := map[HeapSlot]bool{}
 	projection.projectHistory(func(at HeapSlot, _ pointees) {
@@ -76,7 +75,7 @@ func (projection *heapProjection) requirements() []HeapRequirement {
 			continue
 		}
 		at := HeapSlot{Root: named.Root, Path: joinSlotPath(named.Path, key.slot.path)}
-		if truncated[HeapSlot{Root: at.Root}] || summaryPathTooDeep(at.Path) ||
+		if projection.cuts[HeapSlot{Root: at.Root}] || summaryPathTooDeep(at.Path) ||
 			key.kind == HeapRequiresNonNil && requirementSlotMayBeWritten(written, at) {
 			continue
 		}
