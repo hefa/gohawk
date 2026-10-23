@@ -3,6 +3,7 @@ package concurrencyfacts
 import (
 	"go/types"
 	"slices"
+	"strings"
 
 	"github.com/kojah/gohawk/internal/analysis/factcodec"
 	"golang.org/x/tools/go/analysis"
@@ -135,4 +136,13 @@ func (lists emptyLists) listed(object *types.Func) bool {
 	}
 	_, found := slices.BinarySearch(summaries.Names, object.Name())
 	return found
+}
+
+// DescribeFact names the listed functions for a dump.
+func (fact *publishedEmpty) DescribeFact(types.Object) []string {
+	summaries, err := fact.Value()
+	if err != nil {
+		return []string{"undecodable fact: " + err.Error()}
+	}
+	return []string{"empty concurrency summaries of " + strings.Join(summaries.Names, ", ")}
 }

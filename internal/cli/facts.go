@@ -164,7 +164,7 @@ type factSelection struct {
 }
 
 func writeObjectFacts(buffer *bytes.Buffer, action *checker.Action, filter string, referenced map[types.Object]bool, selection factSelection) {
-	facts := action.AllObjectFacts()
+	facts := expandGroups(action)
 	// Positions are compared by file and offset, not by token.Pos: the
 	// fileset's bases depend on the order files were parsed in, which is
 	// parallel, and the dump must read the same on every run.
@@ -205,8 +205,40 @@ func writeObjectFacts(buffer *bytes.Buffer, action *checker.Action, filter strin
 			continue
 		}
 		fact := summaries[function]
-		writeFact(buffer, action, object, "exported here", &fact, selection)
+		origin := "exported here"
+		if object.Pkg() != action.Package.Types {
+			origin = "imported"
+		}
+		writeFact(buffer, action, object, origin, &fact, selection)
 	}
+}
+
+// A pass may publish the facts of a type's methods, or of a package's
+// functions, as one group; the dump prints each member as the fact of its
+// own that it replaces.
+type methodGroup interface {
+	Members(owner types.Object) []analysis.ObjectFact
+}
+
+type functionGroup interface {
+	PackageMembers(pkg *types.Package) []analysis.ObjectFact
+}
+
+func expandGroups(action *checker.Action) []analysis.ObjectFact {
+	var facts []analysis.ObjectFact
+	for _, fact := range action.AllObjectFacts() {
+		if group, ok := fact.Fact.(methodGroup); ok {
+			facts = append(facts, group.Members(fact.Object)...)
+			continue
+		}
+		facts = append(facts, fact)
+	}
+	for _, fact := range action.AllPackageFacts() {
+		if group, ok := fact.Fact.(functionGroup); ok {
+			facts = append(facts, group.PackageMembers(fact.Package)...)
+		}
+	}
+	return facts
 }
 
 // writeFact prints the selected kinds of one fact under a header naming the

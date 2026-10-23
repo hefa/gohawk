@@ -1,91 +1,29 @@
 package lifecyclefacts
 
 import (
-	"errors"
 	"go/types"
-	"maps"
-	"slices"
-	"sync"
 
-	"github.com/fxamacker/cbor/v2"
 	"github.com/kojah/gohawk/internal/analysis/factcodec"
+	"github.com/kojah/gohawk/internal/analysis/factscope"
 	"golang.org/x/tools/go/analysis"
 )
 
-// A type's methods are most of a package's lifecycle facts, and x/tools
-// carries every one of them, each with its package and object paths, to every
-// importer down the build. The methods of one type are published together
-// instead, as one fact on the type: x/tools carries a type's facts wherever it
-// carries its methods', so the summaries are found wherever they were before.
-// Each method's summary keeps its own encoding and is decoded only when that
-// method is asked about, once, as an object fact of its own was.
-//
-// A package's functions are published together too, as one package fact.
-// x/tools never carries a fact about a package-level function beyond the
-// package's direct importers, and only a direct importer can call one, so
-// the package fact reaches exactly the importers the functions' facts did.
-
-// SummaryGroup is a type's method summaries, or a package's function
-// summaries, sorted by name.
-type SummaryGroup struct {
-	_       struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
-	Names   []string
-	Summary []cbor.RawMessage
-	// decoded holds each summary once decoded; copies of a value share it.
-	decoded *methodDecodes
-}
-
-type methodDecodes struct {
-	once  []sync.Once
-	facts []Fact
-	ok    []bool
-}
-
-// UnmarshalCBOR decodes the list and prepares its per-method decodes.
-func (methods *SummaryGroup) UnmarshalCBOR(data []byte) error {
-	type plain SummaryGroup
-	var decoded plain
-	if err := factcodec.UnmarshalPart(data, &decoded); err != nil {
-		return err
-	}
-	if len(decoded.Names) != len(decoded.Summary) || !slices.IsSorted(decoded.Names) {
-		return errSummaryGroup
-	}
-	*methods = SummaryGroup(decoded)
-	methods.decoded = newMethodDecodes(len(methods.Names))
-	return nil
-}
-
-func newMethodDecodes(count int) *methodDecodes {
-	return &methodDecodes{once: make([]sync.Once, count), facts: make([]Fact, count), ok: make([]bool, count)}
-}
-
-var errSummaryGroup = errors.New("grouped summaries are not one sorted summary per name")
+// Methods and functions are most of a package's lifecycle facts, so they are
+// published in groups (see factcodec.Group): a type's methods as one fact on
+// the type, which x/tools carries wherever it carried the methods' facts, and
+// a package's functions as one package fact. x/tools never carries a fact
+// about a package-level function beyond the package's direct importers, and
+// only a direct importer can call one, so the package fact reaches exactly
+// the importers the functions' facts did.
 
 // publishedMethods and publishedFunctions hide the group's schema from gob,
 // as publishedFact does: one is a type's fact, the other a package's.
 type publishedMethods struct {
-	publication[SummaryGroup]
+	publication[factcodec.Group[Fact]]
 }
 
 type publishedFunctions struct {
-	publication[SummaryGroup]
-}
-
-// fact returns the named method's summary.
-func (methods *SummaryGroup) fact(name string) (Fact, bool) {
-	index, found := slices.BinarySearch(methods.Names, name)
-	if !found || methods.decoded == nil {
-		return Fact{}, false
-	}
-	decodes := methods.decoded
-	decodes.once[index].Do(func() {
-		var fact Fact
-		if err := factcodec.UnmarshalPart(methods.Summary[index], &fact); err == nil {
-			decodes.facts[index], decodes.ok[index] = fact, true
-		}
-	})
-	return decodes.facts[index], decodes.ok[index]
+	publication[factcodec.Group[Fact]]
 }
 
 // summaryGroups gathers a package's summaries: methods by receiver type,
@@ -95,8 +33,8 @@ type summaryGroups struct {
 	functions map[string]Fact
 }
 
-// add records a summary, and reports false for a method of a type that is not
-// declared, whose fact is published on its own.
+// add records a summary, and reports false for a method of an undeclared
+// type, whose fact is published on its own.
 func (groups *summaryGroups) add(object *types.Func, fact Fact) bool {
 	signature, ok := object.Type().(*types.Signature)
 	if !ok {
@@ -109,7 +47,7 @@ func (groups *summaryGroups) add(object *types.Func, fact Fact) bool {
 		groups.functions[object.Name()] = fact
 		return true
 	}
-	receiver := methodReceiver(object)
+	receiver := factscope.Receiver(object)
 	if receiver == nil {
 		return false
 	}
@@ -125,54 +63,20 @@ func (groups *summaryGroups) add(object *types.Func, fact Fact) bool {
 
 func (groups *summaryGroups) publish(pass *analysis.Pass) error {
 	for receiver, facts := range groups.methods {
-		methods, err := encodeMethods(facts)
+		group, err := factcodec.NewGroup(facts)
 		if err != nil {
 			return err
 		}
-		pass.ExportObjectFact(receiver, &publishedMethods{factcodec.Wrap(methods)})
+		pass.ExportObjectFact(receiver, &publishedMethods{factcodec.Wrap(group)})
 	}
 	if len(groups.functions) != 0 {
-		functions, err := encodeMethods(groups.functions)
+		group, err := factcodec.NewGroup(groups.functions)
 		if err != nil {
 			return err
 		}
-		pass.ExportPackageFact(&publishedFunctions{factcodec.Wrap(functions)})
+		pass.ExportPackageFact(&publishedFunctions{factcodec.Wrap(group)})
 	}
 	return nil
-}
-
-// encodeMethods lists grouped summaries for publication.
-func encodeMethods(facts map[string]Fact) (SummaryGroup, error) {
-	names := slices.Sorted(maps.Keys(facts))
-	summaries := make([]cbor.RawMessage, len(names))
-	for index, name := range names {
-		fact := facts[name]
-		encoded, err := factcodec.MarshalPart(&fact)
-		if err != nil {
-			return SummaryGroup{}, err
-		}
-		summaries[index] = encoded
-	}
-	// A driver that passes facts in memory hands importers this very value,
-	// never decoding it, so it carries its own per-summary decodes.
-	return SummaryGroup{Names: names, Summary: summaries, decoded: newMethodDecodes(len(names))}, nil
-}
-
-// methodReceiver returns the declared type a method belongs to.
-func methodReceiver(object *types.Func) *types.TypeName {
-	signature, ok := object.Type().(*types.Signature)
-	if !ok || signature.Recv() == nil {
-		return nil
-	}
-	receiver := signature.Recv().Type()
-	if pointer, ok := receiver.(*types.Pointer); ok {
-		receiver = pointer.Elem()
-	}
-	named, ok := receiver.(*types.Named)
-	if !ok {
-		return nil
-	}
-	return named.Origin().Obj()
 }
 
 // importedGroupFact returns a function's summary from its group: its type's
@@ -182,7 +86,7 @@ func importedGroupFact(pass *analysis.Pass, object *types.Func) (Fact, bool) {
 	if !ok {
 		return Fact{}, false
 	}
-	var group SummaryGroup
+	var group factcodec.Group[Fact]
 	var err error
 	if signature.Recv() == nil {
 		var published publishedFunctions
@@ -191,7 +95,7 @@ func importedGroupFact(pass *analysis.Pass, object *types.Func) (Fact, bool) {
 		}
 		group, err = published.Value()
 	} else {
-		receiver := methodReceiver(object)
+		receiver := factscope.Receiver(object)
 		var published publishedMethods
 		if receiver == nil || !pass.ImportObjectFact(receiver, &published) {
 			return Fact{}, false
@@ -201,5 +105,23 @@ func importedGroupFact(pass *analysis.Pass, object *types.Func) (Fact, bool) {
 	if err != nil {
 		return Fact{}, false
 	}
-	return group.fact(object.Name())
+	return group.Lookup(object.Name())
+}
+
+// Members expands the group into its methods' facts, for a dump.
+func (fact *publishedMethods) Members(owner types.Object) []analysis.ObjectFact {
+	return groupMembers(&fact.publication, owner, nil)
+}
+
+// PackageMembers expands the group into its functions' facts, for a dump.
+func (fact *publishedFunctions) PackageMembers(pkg *types.Package) []analysis.ObjectFact {
+	return groupMembers(&fact.publication, nil, pkg)
+}
+
+func groupMembers(envelope *publication[factcodec.Group[Fact]], owner types.Object, pkg *types.Package) []analysis.ObjectFact {
+	group, err := envelope.Value()
+	if err != nil {
+		return nil
+	}
+	return group.Members(owner, pkg, func(fact Fact) analysis.Fact { return publish(fact) })
 }

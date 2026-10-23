@@ -858,14 +858,14 @@ func TestSummaryGroupRoundTripExactly(t *testing.T) {
 			Requires: []heapmodel.HeapRequirement{{Slot: parameter, Method: "Flush"}},
 		}},
 	}
-	methods, err := encodeMethods(facts)
+	methods, err := factcodec.NewGroup(facts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A driver that passes facts in memory hands importers the published
 	// value itself, never decoded.
 	for name, want := range facts {
-		if fact, ok := methods.fact(name); !ok || !reflect.DeepEqual(fact, want) {
+		if fact, ok := methods.Lookup(name); !ok || !reflect.DeepEqual(fact, want) {
 			t.Errorf("%s in memory: got %+v, %v; want %+v", name, fact, ok, want)
 		}
 	}
@@ -883,12 +883,12 @@ func TestSummaryGroupRoundTripExactly(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, want := range facts {
-		fact, ok := got.fact(name)
+		fact, ok := got.Lookup(name)
 		if !ok || !reflect.DeepEqual(fact, want) {
 			t.Errorf("%s: got %+v, %v; want %+v", name, fact, ok, want)
 		}
 	}
-	if _, ok := got.fact("Read"); ok {
+	if _, ok := got.Lookup("Read"); ok {
 		t.Error("a method without a summary was found")
 	}
 }

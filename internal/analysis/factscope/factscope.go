@@ -166,3 +166,21 @@ func (walk walker) parameter(typed *types.TypeParam) {
 	walk.object(typed.Obj())
 	walk.typ(typed.Constraint())
 }
+
+// Receiver returns the declared type a method belongs to, or nil for a
+// package-level function or a method of an undeclared type.
+func Receiver(object *types.Func) *types.TypeName {
+	signature, ok := object.Type().(*types.Signature)
+	if !ok || signature.Recv() == nil {
+		return nil
+	}
+	receiver := signature.Recv().Type()
+	if pointer, ok := receiver.(*types.Pointer); ok {
+		receiver = pointer.Elem()
+	}
+	named, ok := receiver.(*types.Named)
+	if !ok {
+		return nil
+	}
+	return named.Origin().Obj()
+}
