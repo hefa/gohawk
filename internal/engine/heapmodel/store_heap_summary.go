@@ -3,7 +3,6 @@ package heapmodel
 import (
 	"cmp"
 	"slices"
-	"strings"
 
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
 	"golang.org/x/tools/go/ssa"
@@ -110,7 +109,7 @@ func compareHolds(left, right HeapHold) int {
 func (projection *heapProjection) resultHolds(state *regionState, set pointees, parameter int) bool {
 	wanted := projection.graph.external(projection.graph.function.Params[parameter])
 	found := false
-	for target, stale := range set {
+	for target, stale := range set.all() {
 		if target.region.kind == regionNil {
 			continue
 		}
@@ -195,7 +194,7 @@ func (projection *heapProjection) nameResults(returned *ssa.Return) {
 		if projection.results[index] == nil {
 			projection.results[index] = map[*region]bool{}
 		}
-		for target := range set {
+		for target := range set.all() {
 			if target.path == "" && target.region.kind != regionNil {
 				projection.results[index][target.region] = true
 			}
@@ -324,8 +323,8 @@ func (projection *heapProjection) edges(states []*regionState, returns []*ssa.Re
 	record := func(from HeapSlot, set pointees) {
 		entry := entryFor(from)
 		entry.returns++
-		for _, pointee := range orderedSlots(set) {
-			stale := set[pointee]
+		for _, pointee := range orderedPointees(set) {
+			stale := set.get(pointee)
 			target := projection.targetOf(pointee)
 			if from.Root.Kind == HeapResult && target.Kind == HeapTargetNil {
 				entry.ever[target] = true
@@ -350,7 +349,7 @@ func (projection *heapProjection) edges(states []*regionState, returns []*ssa.Re
 	}
 	projection.projectHistory(func(from HeapSlot, set pointees) {
 		entry := entryFor(from)
-		for _, pointee := range orderedSlots(set) {
+		for _, pointee := range orderedPointees(set) {
 			entry.ever[projection.targetOf(pointee)] = true
 		}
 	})
@@ -371,20 +370,6 @@ func (projection *heapProjection) edges(states []*regionState, returns []*ssa.Re
 // orderedSlots lists a slot map's keys in a fixed order, so the slots a
 // bound keeps, and the numbers fresh objects receive, do not depend on
 // map iteration and the summary is the same on every run.
-func orderedSlots[Value any](entries map[slot]Value) []slot {
-	slots := make([]slot, 0, len(entries))
-	for target := range entries {
-		slots = append(slots, target)
-	}
-	slices.SortFunc(slots, func(left, right slot) int {
-		if left.region != right.region {
-			return compareRegions(left.region, right.region)
-		}
-		return strings.Compare(left.path, right.path)
-	})
-	return slots
-}
-
 // boundedSlot names a concrete or placeholder slot within the publication
 // depth bound. State/history edge counts and escape coverage stay with their
 // callers; naming a slot alone establishes neither contents nor retention.
@@ -421,12 +406,12 @@ func (projection *heapProjection) projectRoots(state *regionState, record func(H
 
 // isNilSet reports a set that holds only nil.
 func isNilSet(set pointees) bool {
-	for target := range set {
+	for target := range set.all() {
 		if target.region.kind != regionNil {
 			return false
 		}
 	}
-	return len(set) > 0
+	return set.Len() > 0
 }
 
 // edgeWorthListing drops the edges a summary need not carry: a slot that

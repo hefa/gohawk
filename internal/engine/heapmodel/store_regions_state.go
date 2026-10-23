@@ -83,7 +83,7 @@ func newRegionState() *regionState {
 		escaped:    map[*region]bool{},
 		ran:        map[*region]bool{},
 		escapes:    map[slot]HeapEscape{},
-		deferred:   pointees{},
+		deferred:   newPointees(),
 	}
 }
 
@@ -180,7 +180,10 @@ func (state *regionState) mutableRan() map[*region]bool {
 }
 
 func (state *regionState) mutableDeferred() pointees {
-	state.deferred = ownMap(state, sharedDeferred, state.deferred)
+	if state.shared&sharedDeferred != 0 || state.deferred.isNil() {
+		state.deferred = state.deferred.clone()
+		state.shared &^= sharedDeferred
+	}
 	return state.deferred
 }
 
@@ -275,12 +278,12 @@ func (graph *regionGraph) mergeContents(state, other *regionState, backEdge bool
 			continue
 		}
 		mine := state.writable(target)
-		if mine == nil {
+		if mine.isNil() {
 			mine = graph.content(before, target)
 			state.contents[target] = mine
 			state.own(target)
 		}
-		for pointee, pointeeStale := range set {
+		for pointee, pointeeStale := range set.all() {
 			mine.add(pointee, stale(pointee, pointeeStale))
 		}
 		graph.bound(state, target, nil)
@@ -290,7 +293,7 @@ func (graph *regionGraph) mergeContents(state, other *regionState, backEdge bool
 			implicit := graph.contentView(other, target)
 			if !state.contents[target].absorbs(implicit, stale) {
 				mine := state.writable(target)
-				for pointee, pointeeStale := range implicit {
+				for pointee, pointeeStale := range implicit.all() {
 					mine.add(pointee, stale(pointee, pointeeStale))
 				}
 			}
@@ -367,7 +370,7 @@ func (state *regionState) equal(other *regionState) bool {
 		maps.Equal(state.ran, other.ran) &&
 		maps.Equal(state.escapes, other.escapes) &&
 		state.opaque == other.opaque &&
-		maps.Equal(state.deferred, other.deferred) &&
+		state.deferred.equal(other.deferred) &&
 		slices.Equal(state.calls, other.calls)
 }
 
@@ -377,7 +380,7 @@ func pointeesMapsEqual(left, right map[slot]pointees) bool {
 	}
 	for target, set := range left {
 		theirs, ok := right[target]
-		if !ok || !maps.Equal(set, theirs) {
+		if !ok || !set.equal(theirs) {
 			return false
 		}
 	}
@@ -390,7 +393,7 @@ func pointeesMapsEqual(left, right map[slot]pointees) bool {
 func (state *regionState) difference(other *regionState) string {
 	for _, target := range orderedSlots(other.contents) {
 		mine, ok := state.contents[target]
-		if !ok || !maps.Equal(mine, other.contents[target]) {
+		if !ok || !mine.equal(other.contents[target]) {
 			return slotName(target) + " holds " + renderPointees(other.contents[target]) + ", held " + renderPointees(mine)
 		}
 	}
@@ -445,10 +448,10 @@ func escapeDifference(mine, other map[slot]HeapEscape) string {
 
 // renderPointees names a set's slots for the dump.
 func renderPointees(set pointees) string {
-	names := make([]string, 0, len(set))
-	for _, target := range orderedSlots(set) {
+	names := make([]string, 0, set.Len())
+	for _, target := range orderedPointees(set) {
 		name := slotName(target)
-		if set[target] {
+		if set.get(target) {
 			name += " (stale)"
 		}
 		names = append(names, name)
@@ -539,11 +542,11 @@ func (graph *regionGraph) widen(state, previous *regionState, header *ssa.BasicB
 	}
 	stamp := graph.blockID(header)
 	for target, set := range state.contents {
-		if old, ok := previous.contents[target]; ok && maps.Equal(old, set) || set.unknown() {
+		if old, ok := previous.contents[target]; ok && old.equal(set) || set.unknown() {
 			continue
 		}
-		graph.widened = append(graph.widened, widening{target: target, size: len(set)})
-		state.contents[target] = pointees{{region: graph.unkR}: false}
+		graph.widened = append(graph.widened, widening{target: target, size: set.Len()})
+		state.contents[target] = pointeesOf(slot{region: graph.unkR}, false)
 		state.own(target)
 	}
 	if state.epoch != previous.epoch {
@@ -570,8 +573,8 @@ func (graph *regionGraph) widen(state, previous *regionState, header *ssa.BasicB
 			state.mutableClobbered()[target] = stamp
 		}
 	}
-	if !maps.Equal(state.deferred, previous.deferred) && !state.deferred.unknown() {
-		state.deferred = pointees{{region: graph.unkR}: false}
+	if !state.deferred.equal(previous.deferred) && !state.deferred.unknown() {
+		state.deferred = pointeesOf(slot{region: graph.unkR}, false)
 	}
 }
 
@@ -585,9 +588,9 @@ func (graph *regionGraph) widenPhi(phi *ssa.Phi) {
 	}
 	old, ok := graph.widening.phis[phi]
 	set := graph.values[phi]
-	if !ok || maps.Equal(old, set) || set.unknown() {
+	if !ok || old.equal(set) || set.unknown() {
 		return
 	}
-	graph.widened = append(graph.widened, widening{target: slot{region: graph.opaque(phi)}, at: phi, size: len(set)})
-	graph.values[phi] = pointees{{region: graph.unkR}: false}
+	graph.widened = append(graph.widened, widening{target: slot{region: graph.opaque(phi)}, at: phi, size: set.Len()})
+	graph.values[phi] = pointeesOf(slot{region: graph.unkR}, false)
 }

@@ -195,14 +195,14 @@ func (graph *regionGraph) escape(state *regionState, set pointees, kind HeapEsca
 	// Each slot is queued once, when first reached, so the walk does the
 	// work of one pass over the contents per slot it escapes.
 	seen := map[slot]bool{}
-	queue := make([]slot, 0, len(set))
+	queue := make([]slot, 0, set.Len())
 	push := func(target slot) {
 		if !seen[target] && target.region.kind != regionNil && target.region.kind != regionUnknown {
 			seen[target] = true
 			queue = append(queue, target)
 		}
 	}
-	for target := range set {
+	for target := range set.all() {
 		push(target)
 	}
 	for len(queue) > 0 {
@@ -217,7 +217,7 @@ func (graph *regionGraph) escape(state *regionState, set pointees, kind HeapEsca
 		}
 		for held, contents := range state.contents {
 			if held.region == target.region && slotBeneath(held.path, target.path) {
-				for pointee := range contents {
+				for pointee := range contents.all() {
 					push(pointee)
 				}
 			}
@@ -254,8 +254,8 @@ type escapeOrigin struct {
 // touch a captured cell through its own body, so a cell that body only
 // reads keeps its contents whatever the callee does with the closure.
 func (graph *regionGraph) clobber(state *regionState, set pointees, stamp int) {
-	queue := make([]*region, 0, len(set))
-	for target := range set {
+	queue := make([]*region, 0, set.Len())
+	for target := range set.all() {
 		queue = append(queue, target.region)
 	}
 	seen := map[*region]bool{}
@@ -270,7 +270,7 @@ func (graph *regionGraph) clobber(state *regionState, set pointees, stamp int) {
 			if target.region != object {
 				continue
 			}
-			for pointee := range contents {
+			for pointee := range contents.all() {
 				if object.kind == regionClosure && graph.closureOnlyReads(object, pointee) {
 					continue
 				}
@@ -301,7 +301,7 @@ func (graph *regionGraph) closureOnlyReads(closure *region, captured slot) bool 
 // handed.
 func (graph *regionGraph) call(state *regionState, common *ssa.CallCommon, instruction ssa.Instruction, started bool) {
 	if value, ok := instruction.(ssa.Value); ok {
-		graph.setValue(value, pointees{{region: graph.opaque(value)}: false})
+		graph.setValue(value, pointeesOf(slot{region: graph.opaque(value)}, false))
 	}
 	if graph.definedCall(state, common, instruction, started) {
 		return
@@ -363,7 +363,7 @@ func (graph *regionGraph) runCallback(state *regionState, common *ssa.CallCommon
 		return
 	}
 	set := graph.pointees(common.Value)
-	for target := range set {
+	for target := range set.all() {
 		state.mutableRan()[target.region] = true
 	}
 	graph.clobber(state, set, graph.id(instruction))
@@ -401,14 +401,14 @@ func (graph *regionGraph) mapUpdate(state *regionState, update *ssa.MapUpdate) {
 		graph.invalidateForeign(state, "", graph.id(update), reachAny)
 		return
 	}
-	for target := range targets {
+	for target := range targets.all() {
 		graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, "elem")}, value)
 		graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, "key")}, key)
 	}
 }
 
 func (graph *regionGraph) lookup(state *regionState, lookup *ssa.Lookup) {
-	result := pointees{{region: graph.opaque(lookup)}: false}
+	result := pointeesOf(slot{region: graph.opaque(lookup)}, false)
 	if _, ok := lookup.X.Type().Underlying().(*types.Map); ok {
 		if graph.widening != nil && graph.pointees(lookup.X).unknown() {
 			// The read matching mapUpdate's opaque write while widening.
@@ -416,7 +416,7 @@ func (graph *regionGraph) lookup(state *regionState, lookup *ssa.Lookup) {
 			graph.setValue(lookup, result)
 			return
 		}
-		for target := range graph.pointees(lookup.X) {
+		for target := range graph.pointees(lookup.X).all() {
 			if set, ok := state.contents[slot{region: target.region, path: joinSlotPath(target.path, "elem")}]; ok {
 				result.union(set)
 			}
@@ -515,7 +515,7 @@ func (graph *regionGraph) builtin(state *regionState, builtin *ssa.Builtin, comm
 				graph.escape(state, elements, HeapEscapedField, instruction)
 				elements = graph.loadView(state, graph.selectStep(elements, pathStar), argument)
 			}
-			for target := range result {
+			for target := range result.all() {
 				graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, pathStar)}, elements)
 			}
 			graph.escape(state, elements, HeapEscapedField, instruction)
@@ -525,7 +525,7 @@ func (graph *regionGraph) builtin(state *regionState, builtin *ssa.Builtin, comm
 			return
 		}
 		elements := graph.loadView(state, graph.selectStep(graph.pointees(common.Args[1]), pathStar), common.Args[1])
-		for target := range graph.pointees(common.Args[0]) {
+		for target := range graph.pointees(common.Args[0]).all() {
 			graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, pathStar)}, elements)
 		}
 	case "clear":

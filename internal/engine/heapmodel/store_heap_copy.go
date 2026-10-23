@@ -25,16 +25,16 @@ func (projection *heapProjection) projectConditionalCopy(
 		object = &region{kind: regionOpaque}
 		projection.copies[root.Index] = object
 	}
-	record(HeapSlot{Root: root}, pointees{{region: object}: false})
+	record(HeapSlot{Root: root}, pointeesOf(slot{region: object}, false))
 	walkStructReferences(result.Type(), func(path string) {
-		contents := pointees{}
-		for source, stale := range set {
+		contents := newPointees()
+		for source, stale := range set.all() {
 			target := slot{region: source.region, path: joinSlotPath(source.path, path)}
-			for pointee, old := range projection.copyContent(state, target) {
+			for pointee, old := range projection.copyContent(state, target).all() {
 				contents.add(pointee, stale || old)
 			}
 		}
-		if len(contents) == 0 {
+		if contents.Len() == 0 {
 			contents.add(slot{region: projection.graph.unkR}, false)
 		}
 		record(HeapSlot{Root: root, Path: path}, contents)
@@ -69,12 +69,12 @@ func (projection *heapProjection) resultContents(state *regionState, object slot
 
 func (projection *heapProjection) copyContent(state *regionState, target slot) pointees {
 	set := projection.graph.content(state, target)
-	for pointee := range set {
+	for pointee := range set.all() {
 		if pointee.region.kind == regionPlaceholder && pointee.region.stamp != (versionStamp{}) {
 			// A placeholder after an opaque write names a later version of the
 			// slot, while summaries name the caller's entry values. They cannot
 			// express that version, so it must not become a preserved field.
-			return pointees{{region: projection.graph.unkR}: false}
+			return pointeesOf(slot{region: projection.graph.unkR}, false)
 		}
 	}
 	return set

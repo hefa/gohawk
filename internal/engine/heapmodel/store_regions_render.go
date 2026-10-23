@@ -95,11 +95,11 @@ func RenderRegions(function *ssa.Function) string {
 
 func (graph *regionGraph) renderValue(buffer *strings.Builder, value ssa.Value) {
 	set, ok := graph.values[value]
-	if !ok || len(set) == 0 {
+	if !ok || set.Len() == 0 {
 		return
 	}
-	entries := make([]string, 0, len(set))
-	for target, stale := range set {
+	entries := make([]string, 0, set.Len())
+	for target, stale := range set.all() {
 		entry := regionName(target.region)
 		if target.path != "" {
 			entry += " " + target.path
@@ -132,13 +132,13 @@ func (graph *regionGraph) renderStores(buffer *strings.Builder) {
 	filled := map[slot]int{}
 	for _, state := range states {
 		for target, set := range state.contents {
-			if len(set) == 0 {
+			if set.Len() == 0 {
 				continue
 			}
-			if union[target] == nil {
-				union[target] = pointees{}
+			if union[target].isNil() {
+				union[target] = newPointees()
 			}
-			for pointee, stale := range set {
+			for pointee, stale := range set.all() {
 				union[target].add(pointee, stale)
 			}
 			filled[target]++
@@ -147,8 +147,8 @@ func (graph *regionGraph) renderStores(buffer *strings.Builder) {
 	buffer.WriteString("// stores at return:\n")
 	lines := make([]string, 0, len(union))
 	for target, set := range union {
-		entries := make([]string, 0, len(set))
-		for pointee, stale := range set {
+		entries := make([]string, 0, set.Len())
+		for pointee, stale := range set.all() {
 			entry := slotName(pointee)
 			if stale {
 				entry += " (stale)"
@@ -284,4 +284,33 @@ func valueOrderKey(value ssa.Value) string {
 		return "instr:" + block.Parent().String() + "#" + strconv.Itoa(block.Index) + "." + strconv.Itoa(slices.Index(block.Instrs, typed))
 	}
 	return "value:" + value.String()
+}
+
+// orderedPointees returns a set's members in orderedSlots' order.
+func orderedPointees(set pointees) []slot {
+	members := make([]slot, 0, set.Len())
+	for member := range set.all() {
+		members = append(members, member)
+	}
+	sortSlots(members)
+	return members
+}
+
+func orderedSlots[Value any](entries map[slot]Value) []slot {
+	slots := make([]slot, 0, len(entries))
+	for target := range entries {
+		slots = append(slots, target)
+	}
+	sortSlots(slots)
+	return slots
+}
+
+// sortSlots orders slots by region identity, then path.
+func sortSlots(slots []slot) {
+	slices.SortFunc(slots, func(left, right slot) int {
+		if left.region != right.region {
+			return compareRegions(left.region, right.region)
+		}
+		return strings.Compare(left.path, right.path)
+	})
 }

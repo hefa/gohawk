@@ -1,7 +1,7 @@
 package heapmodel
 
 import (
-	"maps"
+	"iter"
 	"strconv"
 	"strings"
 	"sync"
@@ -94,7 +94,95 @@ const pathStar = "index:*"
 // pointees is the set of slots a value may refer to, or a slot may hold. A
 // stale entry was carried around a back edge from an earlier iteration and
 // supports may-answers only.
-type pointees map[slot]bool
+//
+// A set has a map's reference semantics: copies share one set, and the zero
+// value reads as empty and must not be written.
+type pointees struct{ s *pointeeSet }
+
+type pointeeSet struct{ m map[slot]bool }
+
+func newPointees() pointees { return pointees{s: &pointeeSet{m: map[slot]bool{}}} }
+
+// pointeesOf returns a new set holding member.
+func pointeesOf(member slot, stale bool) pointees {
+	set := newPointees()
+	set.put(member, stale)
+	return set
+}
+
+func (set pointees) isNil() bool { return set.s == nil }
+
+func (set pointees) Len() int {
+	if set.s == nil {
+		return 0
+	}
+	return len(set.s.m)
+}
+
+// get returns member's stale bit, false when absent.
+func (set pointees) get(member slot) bool {
+	if set.s == nil {
+		return false
+	}
+	return set.s.m[member]
+}
+
+func (set pointees) lookup(member slot) (stale, ok bool) {
+	if set.s == nil {
+		return false, false
+	}
+	stale, ok = set.s.m[member]
+	return stale, ok
+}
+
+func (set pointees) put(member slot, stale bool) { set.s.m[member] = stale }
+
+func (set pointees) remove(member slot) {
+	if set.s != nil {
+		delete(set.s.m, member)
+	}
+}
+
+func (set pointees) clearAll() {
+	if set.s != nil {
+		clear(set.s.m)
+	}
+}
+
+// all yields each member and its stale bit.
+func (set pointees) all() iter.Seq2[slot, bool] {
+	return func(yield func(slot, bool) bool) {
+		if set.s == nil {
+			return
+		}
+		for member, stale := range set.s.m {
+			if !yield(member, stale) {
+				return
+			}
+		}
+	}
+}
+
+// equal reports whether both sets hold the same members with the same bits;
+// a zero set equals an empty one.
+func (set pointees) equal(other pointees) bool {
+	if set.Len() != other.Len() {
+		return false
+	}
+	for member, stale := range set.all() {
+		if theirs, ok := other.lookup(member); !ok || theirs != stale {
+			return false
+		}
+	}
+	return true
+}
+
+// copyFrom adds every member of other with its bit, overwriting.
+func (set pointees) copyFrom(other pointees) {
+	for member, stale := range other.all() {
+		set.put(member, stale)
+	}
+}
 
 // add records a slot, keeping an entry stale once any addition was. Unknown
 // absorbs the set: a set that may be anything gains nothing from another
@@ -102,20 +190,18 @@ type pointees map[slot]bool
 // to settle rather than grow, widen, and grow again on every round.
 func (set pointees) add(target slot, stale bool) {
 	if target.region.kind == regionUnknown {
-		for other := range set {
-			if other != target {
-				delete(set, other)
-			}
-		}
-		set[target] = set[target] || stale
+		// Keep only the target, with its own stale bit if it was present.
+		stale = set.get(target) || stale
+		set.clearAll()
+		set.put(target, stale)
 		return
 	}
-	switch len(set) {
+	switch set.Len() {
 	case 0:
-		set[target] = stale
+		set.put(target, stale)
 		return
 	case 1:
-		for previous, previousStale := range set {
+		for previous, previousStale := range set.all() {
 			if previous.region.kind == regionUnknown {
 				return
 			}
@@ -124,31 +210,31 @@ func (set pointees) add(target slot, stale bool) {
 			if previous == target {
 				stale = stale || previousStale
 			}
-			set[target] = stale
+			set.put(target, stale)
 			return
 		}
 	}
 	if set.unknown() {
 		return
 	}
-	set[target] = set[target] || stale
+	set.put(target, set.get(target) || stale)
 }
 
 func (set pointees) union(other pointees) {
-	if len(other) == 0 {
+	if other.Len() == 0 {
 		return
 	}
 	// Known additions cannot change whether the destination is unknown. Keep
 	// that answer for the merge instead of scanning the growing set each time.
 	unknown := set.unknown()
-	for target, stale := range other {
+	for target, stale := range other.all() {
 		if target.region.kind == regionUnknown {
 			set.add(target, stale)
 			unknown = true
 			continue
 		}
 		if !unknown {
-			set[target] = set[target] || stale
+			set.put(target, set.get(target) || stale)
 		}
 	}
 }
@@ -160,14 +246,14 @@ func (set pointees) union(other pointees) {
 // changes any set but itself.
 func (set pointees) absorbs(other pointees, stale func(slot, bool) bool) bool {
 	unknown := set.unknown()
-	for target, targetStale := range other {
+	for target, targetStale := range other.all() {
 		if stale != nil {
 			targetStale = stale(target, targetStale)
 		}
-		old, ok := set[target]
+		old, ok := set.lookup(target)
 		switch {
 		case target.region.kind == regionUnknown:
-			if !ok || len(set) != 1 || targetStale && !old {
+			if !ok || set.Len() != 1 || targetStale && !old {
 				return false
 			}
 		case unknown:
@@ -179,14 +265,14 @@ func (set pointees) absorbs(other pointees, stale func(slot, bool) bool) bool {
 }
 
 func (set pointees) clone() pointees {
-	result := make(pointees, len(set))
-	maps.Copy(result, set)
+	result := pointees{s: &pointeeSet{m: make(map[slot]bool, set.Len())}}
+	result.copyFrom(set)
 	return result
 }
 
 // unknown reports whether the set admits any object.
 func (set pointees) unknown() bool {
-	for target := range set {
+	for target := range set.all() {
 		if target.region.kind == regionUnknown {
 			return true
 		}
@@ -283,24 +369,24 @@ type widening struct {
 // limit, and records that it did.
 func (graph *regionGraph) bound(state *regionState, target slot, at ssa.Instruction) {
 	set := state.contents[target]
-	if len(set) <= pointeeLimit {
+	if set.Len() <= pointeeLimit {
 		return
 	}
-	graph.widened = append(graph.widened, widening{target: target, at: at, size: len(set)})
-	state.contents[target] = pointees{{region: graph.unkR}: false}
+	graph.widened = append(graph.widened, widening{target: target, at: at, size: set.Len()})
+	state.contents[target] = pointeesOf(slot{region: graph.unkR}, false)
 }
 
 // boundValue collapses a value's pointees to unknown when they outgrew the
 // limit.
 func (graph *regionGraph) boundValue(value ssa.Value) {
 	set := graph.values[value]
-	if len(set) <= pointeeLimit {
+	if set.Len() <= pointeeLimit {
 		return
 	}
 	if instruction, ok := value.(ssa.Instruction); ok {
-		graph.widened = append(graph.widened, widening{target: slot{region: graph.opaque(value)}, at: instruction, size: len(set)})
+		graph.widened = append(graph.widened, widening{target: slot{region: graph.opaque(value)}, at: instruction, size: set.Len()})
 	}
-	graph.values[value] = pointees{{region: graph.unkR}: false}
+	graph.values[value] = pointeesOf(slot{region: graph.unkR}, false)
 }
 
 // appliedSummary is one summary application, for the dump.

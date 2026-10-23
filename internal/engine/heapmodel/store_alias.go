@@ -203,7 +203,7 @@ func (graph *regionGraph) publishedAfterUnlocked(object *region, at ssa.Instruct
 // object; exact storage identity continues to require singleSlot.
 func singleObjectSlot(set pointees) (slot, bool) {
 	var object slot
-	for target, stale := range set {
+	for target, stale := range set.all() {
 		if stale || target.region.kind == regionUnknown || object.region != nil && object.region != target.region {
 			return slot{}, false
 		}

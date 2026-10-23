@@ -149,7 +149,7 @@ func DeferredCellRelationWithin(cell *ssa.Alloc, target ssa.Value, invocation ss
 	}
 	graph := regionsOf(cell)
 	held, ok := graph.contentWhenDeferredRunWithin(cell, invocation, budget)
-	if !ok || len(held) == 0 {
+	if !ok || held.Len() == 0 {
 		return DeferredCellUnknown, false
 	}
 	object, ok := graph.pointsTo(target)
@@ -158,7 +158,7 @@ func DeferredCellRelationWithin(cell *ssa.Alloc, target ssa.Value, invocation ss
 	}
 	targetSlot, exact := singleSlot(object)
 	isTarget, contains := exact, true
-	for entry, stale := range held {
+	for entry, stale := range held.all() {
 		if !budget.Spend() {
 			return DeferredCellUnknown, false
 		}
@@ -193,13 +193,13 @@ func DeferredCellRelationWithin(cell *ssa.Alloc, target ssa.Value, invocation ss
 func (graph *regionGraph) contentWhenDeferredRunWithin(address ssa.Value, registration ssa.Instruction, budget *proofs.SearchBudget) (pointees, bool) {
 	defer graph.lock()()
 	if !graph.available || registration == nil {
-		return nil, false
+		return pointees{}, false
 	}
 	points, available := deferredObservationPoints(graph.function, budget)
 	if !available {
-		return nil, false
+		return pointees{}, false
 	}
-	result := pointees{}
+	result := newPointees()
 	found := false
 	for _, point := range points {
 		if !cfg.InstructionMayFollowWithin(registration, point, budget) {
@@ -207,18 +207,18 @@ func (graph *regionGraph) contentWhenDeferredRunWithin(address ssa.Value, regist
 		}
 		set, ok := graph.contentAtUnlocked(address, point)
 		if !ok {
-			return nil, false
+			return pointees{}, false
 		}
-		for target, stale := range set {
+		for target, stale := range set.all() {
 			if !budget.Spend() {
-				return nil, false
+				return pointees{}, false
 			}
 			result.add(target, stale)
 		}
 		found = true
 	}
 	if budget.Exhausted() || budget.PoolExhausted() {
-		return nil, false
+		return pointees{}, false
 	}
 	return result, found
 }

@@ -39,25 +39,25 @@ const maxContentHops = 64
 // https://github.com/golang/freetype/tree/e2365dfdc4a0/truetype
 func (graph *regionGraph) contentFollowing(state *regionState, target slot, path []slot) pointees {
 	if len(path) >= maxContentHops || slices.Contains(path, target) {
-		return pointees{{region: graph.unkR}: false}
+		return pointeesOf(slot{region: graph.unkR}, false)
 	}
 	if target.region.kind == regionUnknown {
-		return pointees{target: false}
+		return pointeesOf(target, false)
 	}
 	if target.region.kind == regionNil {
-		return pointees{{region: graph.nilR}: false}
+		return pointeesOf(slot{region: graph.nilR}, false)
 	}
 	// Unwritten reads return their own set. Allocate a merge result only
 	// when stored evidence contributes or a dynamic read needs a union.
 	var result pointees
-	if set := state.contents[target]; len(set) > 0 {
-		result = pointees{}
+	if set := state.contents[target]; set.Len() > 0 {
+		result = newPointees()
 		result.union(set)
 	}
 	step := lastStep(target.path)
 	if step == pathStar {
-		if result == nil {
-			result = pointees{}
+		if result.isNil() {
+			result = newPointees()
 		}
 		for other, set := range state.contents {
 			if other.region == target.region && parentPath(other.path) == parentPath(target.path) && isIndexStep(lastStep(other.path)) {
@@ -70,14 +70,14 @@ func (graph *regionGraph) contentFollowing(state *regionState, target slot, path
 		return result
 	}
 	if isIndexStep(step) {
-		if set := state.contents[graph.starSlot(target)]; len(set) > 0 {
-			if result == nil {
-				result = pointees{}
+		if set := state.contents[graph.starSlot(target)]; set.Len() > 0 {
+			if result.isNil() {
+				result = newPointees()
 			}
 			result.union(set)
 		}
 	}
-	if len(result) > 0 {
+	if result.Len() > 0 {
 		return result
 	}
 	return graph.unwritten(state, target, path)
@@ -89,7 +89,7 @@ func (graph *regionGraph) contentFollowing(state *regionState, target slot, path
 // an object the function did not allocate.
 func (graph *regionGraph) unwritten(state *regionState, target slot, path []slot) pointees {
 	if member, ok := graph.unwrittenSole(state, target); ok {
-		return pointees{member: false}
+		return pointeesOf(member, false)
 	}
 	if backing, rest, ok := graph.backingOf(state, target); ok {
 		return graph.contentFollowing(state, slot{region: backing, path: rest}, append(path, target))
@@ -141,7 +141,7 @@ func (graph *regionGraph) contentView(state *regionState, target slot) pointees 
 	}
 	// A stored set that no wildcard element adds to is the answer itself;
 	// content would copy it.
-	if set := state.contents[target]; len(set) > 0 && !graph.wildcardContributes(state, target) {
+	if set := state.contents[target]; set.Len() > 0 && !graph.wildcardContributes(state, target) {
 		return set
 	}
 	return graph.content(state, target)
@@ -152,7 +152,7 @@ func (graph *regionGraph) contentView(state *regionState, target slot) pointees 
 // array whose wildcard element holds something.
 func (graph *regionGraph) wildcardContributes(state *regionState, target slot) bool {
 	step := lastStep(target.path)
-	return step == pathStar || isIndexStep(step) && len(state.contents[graph.starSlot(target)]) > 0
+	return step == pathStar || isIndexStep(step) && state.contents[graph.starSlot(target)].Len() > 0
 }
 
 // contentSole reports the one object content would return for a slot it
@@ -165,7 +165,7 @@ func (graph *regionGraph) contentSole(state *regionState, target slot) (slot, bo
 		return slot{region: graph.nilR}, true
 	case regionSite, regionExternal, regionOpaque, regionPlaceholder, regionSnapshot, regionClosure:
 	}
-	if len(state.contents[target]) > 0 || graph.wildcardContributes(state, target) {
+	if state.contents[target].Len() > 0 || graph.wildcardContributes(state, target) {
 		return slot{}, false
 	}
 	return graph.unwrittenSole(state, target)
@@ -177,8 +177,8 @@ func (graph *regionGraph) singleton(member slot, stale bool) pointees {
 	// The whole object, the usual member, keeps its set on the region; a
 	// per-graph map of every singleton grew with every graph.
 	if member.path == "" && !stale {
-		if member.region.whole == nil {
-			member.region.whole = pointees{member: false}
+		if member.region.whole.isNil() {
+			member.region.whole = pointeesOf(member, false)
 		}
 		return member.region.whole
 	}
@@ -188,7 +188,7 @@ func (graph *regionGraph) singleton(member slot, stale bool) pointees {
 		if graph.singletons == nil {
 			graph.singletons = map[singletonKey]pointees{}
 		}
-		set = pointees{member: stale}
+		set = pointeesOf(member, stale)
 		graph.singletons[key] = set
 	}
 	return set
@@ -256,15 +256,15 @@ func (graph *regionGraph) snapshotOf(state *regionState, addresses pointees, loa
 	if instruction, ok := loaded.(ssa.Instruction); ok {
 		stamp = graph.id(instruction)
 	}
-	if len(addresses) != 1 || addresses.unknown() {
+	if addresses.Len() != 1 || addresses.unknown() {
 		state.mutableClobbered()[slot{region: snapshot}] = stamp
-		return pointees{{region: snapshot}: false}
+		return pointeesOf(slot{region: snapshot}, false)
 	}
-	for address, stale := range addresses {
+	for address, stale := range addresses.all() {
 		if lastStep(address.path) == pathStar {
 			state.mutableClobbered()[slot{region: snapshot}] = stamp
 			graph.selectedSnapshot(state, address, stale, loaded, snapshot)
-			return pointees{{region: snapshot}: stale}
+			return pointeesOf(slot{region: snapshot}, stale)
 		}
 		graph.copySubtree(state, address, slot{region: snapshot})
 		snapshot.source = address
@@ -276,9 +276,9 @@ func (graph *regionGraph) snapshotOf(state *regionState, addresses pointees, loa
 		if clobber, ok := graph.clobberedBeneath(state, address); ok {
 			state.mutableClobbered()[slot{region: snapshot}] = clobber
 		}
-		return pointees{{region: snapshot}: stale}
+		return pointeesOf(slot{region: snapshot}, stale)
 	}
-	return pointees{{region: snapshot}: false}
+	return pointeesOf(slot{region: snapshot}, false)
 }
 
 // copySubtree copies every entry beneath source to the same path beneath
@@ -363,7 +363,7 @@ func (graph *regionGraph) forgetWholeAbove(state *regionState, target slot) {
 // storeAggregate records the aggregate value as the slot's whole content
 // and copies its sub-slots beneath the target.
 func (graph *regionGraph) storeAggregate(state *regionState, target slot, value pointees, strong bool, stamp int) {
-	if !strong || len(value) != 1 || value.unknown() {
+	if !strong || value.Len() != 1 || value.unknown() {
 		// A possible aggregate replacement can change any stored field.
 		// Its unknown stamp cannot override an old concrete field entry,
 		// so forget the selected contents as well as the enclosing cache.
@@ -372,7 +372,7 @@ func (graph *regionGraph) storeAggregate(state *regionState, target slot, value 
 	}
 	graph.clearSubtree(state, target)
 	graph.forgetWholeAbove(state, target)
-	for source := range value {
+	for source := range value.all() {
 		if source.region.kind == regionNil {
 			// A definite zero value empties the selected storage; it must
 			// not inherit the uncertainty of a possible aggregate overwrite.
@@ -405,17 +405,17 @@ func (graph *regionGraph) forgetStoredSlot(state *regionState, target slot, stam
 func (graph *regionGraph) remember(target slot, value pointees) {
 	held, ok := graph.history[target]
 	if !ok {
-		held = pointees{}
+		held = newPointees()
 		graph.history[target] = held
 	}
 	if held.unknown() {
 		return
 	}
-	for object, stale := range value {
+	for object, stale := range value.all() {
 		held.add(object, stale)
-		if len(held) > pointeeLimit {
-			clear(held)
-			held[slot{region: graph.unkR}] = false
+		if held.Len() > pointeeLimit {
+			held.clearAll()
+			held.put(slot{region: graph.unkR}, false)
 			return
 		}
 	}
@@ -429,7 +429,7 @@ func (graph *regionGraph) weakElementStore(state *regionState, target slot, valu
 	graph.forgetWholeAbove(state, target)
 	graph.remember(target, value)
 	star := state.writable(target)
-	if star == nil {
+	if star.isNil() {
 		// An unknown index may leave any particular element untouched.
 		// Preserve existing elements and the unwritten nil/foreign possibility
 		// before adding the new value; a wildcard store is never an exact fill.
@@ -479,8 +479,8 @@ func (graph *regionGraph) storeConditionallyInto(state *regionState, address, wr
 func (graph *regionGraph) storeValue(state *regionState, address, written ssa.Value, at ssa.Instruction, definite bool) {
 	targets := graph.pointees(address)
 	value := graph.pointees(written)
-	strong := definite && len(targets) == 1
-	for target, stale := range targets {
+	strong := definite && targets.Len() == 1
+	for target, stale := range targets.all() {
 		if stale || target.region.kind == regionUnknown || lastStep(target.path) == pathStar {
 			strong = false
 		}
@@ -499,7 +499,7 @@ func (graph *regionGraph) storeValue(state *regionState, address, written ssa.Va
 	// walk visited last, and a build that visits them in another order
 	// would never settle.
 	steps := map[string]bool{}
-	for target := range targets {
+	for target := range targets.all() {
 		if target.region.kind == regionNil {
 			continue
 		}
@@ -513,7 +513,7 @@ func (graph *regionGraph) storeValue(state *regionState, address, written ssa.Va
 	for _, step := range slices.Sorted(maps.Keys(steps)) {
 		graph.invalidateForeign(state, step, graph.id(at), reachAny)
 	}
-	for target := range targets {
+	for target := range targets.all() {
 		if target.region.kind == regionNil {
 			continue
 		}
@@ -545,7 +545,7 @@ func (graph *regionGraph) storeSlot(state *regionState, target slot, value point
 		return
 	}
 	existing := state.writable(target)
-	if existing == nil {
+	if existing.isNil() {
 		existing = graph.content(state, target)
 		state.contents[target] = existing
 		state.own(target)

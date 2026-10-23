@@ -197,13 +197,13 @@ func (graph *regionGraph) buildFailureText() string {
 // could say.
 func (graph *regionGraph) pointsToUnlocked(value ssa.Value) (pointees, bool) {
 	if !graph.available || value == nil {
-		return nil, false
+		return pointees{}, false
 	}
 	if set, ok := graph.values[value]; ok {
 		return set, true
 	}
 	set := graph.pointees(value)
-	return set, len(set) > 0
+	return set, set.Len() > 0
 }
 
 // aliasProof decides whether two values may refer to the same object and
@@ -225,8 +225,8 @@ func (graph *regionGraph) aliasProof(left, right ssa.Value) proofs.AliasProof {
 		return proofs.AliasProof{Aliases: true, Reason: proofs.EvidenceUnknownPointee, Provenance: proofs.EvidenceFromLocalSSA}
 	}
 	reason := proofs.EvidenceDisjointObjects
-	for x := range a {
-		for y := range b {
+	for x := range a.all() {
+		for y := range b.all() {
 			if graph.slotsMayAlias(x, y, aliasDepth) {
 				return proofs.AliasProof{Aliases: true, Reason: proofs.EvidenceSharedSlot, Provenance: proofs.EvidenceFromLocalSSA}
 			}
@@ -294,7 +294,7 @@ func (graph *regionGraph) everHeld(placeholder, target slot, depth int) bool {
 		if held.region != source.region || !pathsMayAlias(held.path, source.path) {
 			continue
 		}
-		for pointee := range set {
+		for pointee := range set.all() {
 			pointee.path = joinSlotPath(pointee.path, placeholder.path)
 			if pointee.region.kind == regionUnknown {
 				return true
@@ -343,10 +343,10 @@ func (graph *regionGraph) mustSame(left, right ssa.Value) bool {
 
 // singleSlot returns the one non-stale, non-unknown slot of a set.
 func singleSlot(set pointees) (slot, bool) {
-	if len(set) != 1 {
+	if set.Len() != 1 {
 		return slot{}, false
 	}
-	for target, stale := range set {
+	for target, stale := range set.all() {
 		if stale || target.region.kind == regionUnknown || lastStep(target.path) == pathStar {
 			return slot{}, false
 		}
@@ -359,11 +359,11 @@ func singleSlot(set pointees) (slot, bool) {
 func (graph *regionGraph) contentAtUnlocked(address ssa.Value, at ssa.Instruction) (pointees, bool) {
 	state := graph.stateAt(at)
 	if state == nil {
-		return nil, false
+		return pointees{}, false
 	}
 	addresses := graph.pointees(address)
-	if len(addresses) == 0 {
-		return nil, false
+	if addresses.Len() == 0 {
+		return pointees{}, false
 	}
 	return graph.load(state, addresses, address), true
 }
@@ -385,14 +385,14 @@ func (graph *regionGraph) everContainedUnlocked(object slot, target pointees, bu
 		if held.region != object.region || !slotBeneath(held.path, object.path) || held.path == object.path {
 			continue
 		}
-		for pointee := range set {
+		for pointee := range set.all() {
 			if !budget.Spend() {
 				return false
 			}
 			if pointee.region.kind == regionUnknown {
 				return true
 			}
-			if _, ok := target[pointee]; ok {
+			if _, ok := target.lookup(pointee); ok {
 				return true
 			}
 		}
@@ -562,8 +562,8 @@ func (graph *regionGraph) containsAt(owner, value ssa.Value, at ssa.Instruction)
 // but cannot establish containment before the instruction that performs it.
 func containsThroughSlots(contents map[slot]pointees, from, target pointees) bool {
 	seen := map[*region]bool{}
-	queue := make([]*region, 0, len(from))
-	for candidate := range from {
+	queue := make([]*region, 0, from.Len())
+	for candidate := range from.all() {
 		queue = append(queue, candidate.region)
 	}
 	for depth := 0; len(queue) > 0 && depth < aliasDepth; depth++ {
@@ -577,8 +577,8 @@ func containsThroughSlots(contents map[slot]pointees, from, target pointees) boo
 				if held.region != object {
 					continue
 				}
-				for pointee := range set {
-					if _, wanted := target[pointee]; wanted || pointee.region.kind == regionUnknown {
+				for pointee := range set.all() {
+					if _, wanted := target.lookup(pointee); wanted || pointee.region.kind == regionUnknown {
 						return true
 					}
 					next = append(next, pointee.region)

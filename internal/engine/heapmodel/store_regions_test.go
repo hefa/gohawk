@@ -365,23 +365,23 @@ func TestRegionHistoryWidensConservatively(t *testing.T) {
 	objects := make([]slot, pointeeLimit+1)
 	for index := range objects {
 		objects[index] = slot{region: &region{kind: regionSite, serial: index}}
-		graph.remember(held, pointees{objects[index]: false})
-		if index == pointeeLimit-1 && len(graph.history[held]) != pointeeLimit {
-			t.Fatalf("history below limit has %d objects, want %d", len(graph.history[held]), pointeeLimit)
+		graph.remember(held, pointeesOf(objects[index], false))
+		if index == pointeeLimit-1 && graph.history[held].Len() != pointeeLimit {
+			t.Fatalf("history below limit has %d objects, want %d", graph.history[held].Len(), pointeeLimit)
 		}
 	}
-	if got := graph.history[held]; len(got) != 1 || !got.unknown() {
+	if got := graph.history[held]; got.Len() != 1 || !got.unknown() {
 		t.Fatalf("history above limit = %v, want unknown only", got)
 	}
-	graph.remember(held, pointees{objects[0]: false})
-	if got := graph.history[held]; len(got) != 1 || !got.unknown() {
+	graph.remember(held, pointeesOf(objects[0], false))
+	if got := graph.history[held]; got.Len() != 1 || !got.unknown() {
 		t.Fatalf("widened history grew again: %v", got)
 	}
-	from, target := pointees{{region: owner}: false}, pointees{objects[0]: false}
+	from, target := pointeesOf(slot{region: owner}, false), pointeesOf(objects[0], false)
 	if !containsThroughSlots(graph.history, from, target) {
 		t.Fatal("widened slot history must admit possible transitive containment")
 	}
-	if !graph.everContainedUnlocked(slot{region: owner}, pointees{objects[0]: false}, nil) {
+	if !graph.everContainedUnlocked(slot{region: owner}, pointeesOf(objects[0], false), nil) {
 		t.Fatal("unknown history must admit possible containment")
 	}
 }

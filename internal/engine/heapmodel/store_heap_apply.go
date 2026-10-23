@@ -79,9 +79,9 @@ func (graph *regionGraph) applyEscapes(state *regionState, summary HeapSummary, 
 		// beneath it escapes what that slot holds.
 		set := substitution.slots(effect.Slot)
 		if effect.Slot.Path != "" {
-			contents := pointees{}
-			for held, stale := range set {
-				for pointee, pointeeStale := range graph.contentView(state, held) {
+			contents := newPointees()
+			for held, stale := range set.all() {
+				for pointee, pointeeStale := range graph.contentView(state, held).all() {
 					contents.add(pointee, stale || pointeeStale)
 				}
 			}
@@ -201,9 +201,9 @@ func (substitution *heapSubstitution) targets(target HeapTarget, at HeapSlot) (p
 			return substitution.slots(target.Slot), true
 		}
 		// Whatever the caller holds at the slot: its content, not the slot.
-		result := pointees{}
-		for held, stale := range substitution.slots(target.Slot) {
-			for pointee, pointeeStale := range substitution.graph.contentView(substitution.state, held) {
+		result := newPointees()
+		for held, stale := range substitution.slots(target.Slot).all() {
+			for pointee, pointeeStale := range substitution.graph.contentView(substitution.state, held).all() {
 				result.add(pointee, stale || pointeeStale)
 			}
 		}
@@ -211,7 +211,7 @@ func (substitution *heapSubstitution) targets(target HeapTarget, at HeapSlot) (p
 	case HeapTargetAddress:
 		return substitution.slots(target.Slot), true
 	}
-	return nil, false
+	return pointees{}, false
 }
 
 // apply writes one edge into the caller's state.
@@ -227,8 +227,8 @@ func (substitution *heapSubstitution) apply(edge HeapEdge) {
 		}
 		if edge.From.Path == "" {
 			set := substitution.returned[edge.From.Root.Index]
-			if set == nil {
-				set = pointees{}
+			if set.isNil() {
+				set = newPointees()
 				substitution.returned[edge.From.Root.Index] = set
 			}
 			set.union(value)
@@ -237,7 +237,7 @@ func (substitution *heapSubstitution) apply(edge HeapEdge) {
 	}
 	destinations := substitution.slots(edge.From)
 	_, exact := singleSlot(destinations)
-	for destination := range destinations {
+	for destination := range destinations.all() {
 		if destination.region.kind == regionUnknown || destination.region.kind == regionNil {
 			continue
 		}
@@ -269,7 +269,7 @@ func (substitution *heapSubstitution) forget(at HeapSlot) {
 }
 
 func (substitution *heapSubstitution) forgetSlots(set pointees) {
-	for target := range set {
+	for target := range set.all() {
 		if target.region.kind == regionSite {
 			substitution.graph.forgetStoredSlot(substitution.state, target, substitution.graph.id(substitution.instruction))
 			continue
@@ -279,7 +279,7 @@ func (substitution *heapSubstitution) forgetSlots(set pointees) {
 		substitution.graph.forgetWholeAbove(substitution.state, target)
 		// A closure the callee may have run wrote through what it captured.
 		if target.region.kind == regionClosure {
-			substitution.graph.clobber(substitution.state, pointees{target: false}, substitution.graph.id(substitution.instruction))
+			substitution.graph.clobber(substitution.state, pointeesOf(target, false), substitution.graph.id(substitution.instruction))
 		}
 		// A foreign object the callee may have rewritten beneath: forget
 		// what was known there and restamp its unwritten content.
@@ -300,15 +300,15 @@ func (substitution *heapSubstitution) results(call *ssa.Call) {
 	count := call.Common().Signature().Results().Len()
 	for index := range count {
 		set := substitution.returned[index]
-		if set == nil {
-			set = pointees{{region: substitution.freshObject("result:" + strconv.Itoa(index))}: false}
+		if set.isNil() {
+			set = pointeesOf(slot{region: substitution.freshObject("result:" + strconv.Itoa(index))}, false)
 		}
 		if count == 1 {
 			substitution.graph.values[call] = set.clone()
 			return
 		}
 		if extract := ssacall.CallResult(call, index); extract != nil {
-			for pointee := range set {
+			for pointee := range set.all() {
 				if pointee.region.kind == regionOpaque && pointee.region.origin == ssa.Value(call) && pointee.path == "" {
 					pointee.region.origin = extract
 				}

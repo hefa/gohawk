@@ -124,11 +124,11 @@ func QueryEscape(value ssa.Value, scope EscapeScope) EscapeProof {
 	if !ok {
 		return EscapeProof{Reason: EscapeUnavailable, Scope: scope}
 	}
-	if len(set) != 1 {
+	if set.Len() != 1 {
 		return EscapeProof{Reason: EscapeIdentityUnknown, Scope: scope}
 	}
 	var target slot
-	for candidate := range set {
+	for candidate := range set.all() {
 		target = candidate
 	}
 	if target.region.kind != regionSite || lastStep(target.path) == pathStar {
@@ -292,7 +292,7 @@ func (graph *regionGraph) escapeReachability(state *regionState, roots pointees,
 	queue := []slot{}
 	complete := true
 	found := false
-	for root, stale := range roots {
+	for root, stale := range roots.all() {
 		queue = append(queue, root)
 		complete = complete && !stale
 	}
@@ -344,7 +344,7 @@ func escapeChildren(queue []slot, state *regionState, current slot, budget *proo
 		if held.region != current.region || !slotBeneath(held.path, current.path) {
 			continue
 		}
-		for child, stale := range contents {
+		for child, stale := range contents.all() {
 			queue = append(queue, child)
 			complete = complete && !stale
 		}
