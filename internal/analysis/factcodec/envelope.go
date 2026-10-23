@@ -3,6 +3,7 @@ package factcodec
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // Envelope hides a summary's fields from gob's type-descriptor traversal.
@@ -23,21 +24,29 @@ type Envelope[T any] struct {
 // Copies share the immutable payload and its state, never copy a used mutex.
 //
 // A state starts with one half, the value of a published fact or the bytes of
-// an imported one, and once computes the other on first need; imported says
-// which, and never changes. The decoded value is held behind a pointer: a unit
-// imports millions of facts it never consults, and an inline value made every
-// imported state as large as a decoded fact.
+// an imported one, and computes the other on first need; imported says which,
+// and never changes. The decoded value is held behind one pointer, set once:
+// a unit imports millions of facts it never consults, and the state of each
+// was most of what importing them allocated. Two first readers may both
+// decode; they produce the same value and one of them is kept.
 type envelopeState[T any] struct {
-	imported bool
-	once     sync.Once
 	data     []byte
-	value    *T
-	err      error
+	decoded  atomic.Pointer[decodedValue[T]]
+	encoding sync.Mutex
+	imported bool
+}
+
+// decodedValue is a state's value, or why an encoding did not decode.
+type decodedValue[T any] struct {
+	value T
+	err   error
 }
 
 // Wrap prepares a summary for publication without copying its reachable data.
 func Wrap[T any](value T) Envelope[T] {
-	return Envelope[T]{state: &envelopeState[T]{value: &value}}
+	state := &envelopeState[T]{}
+	state.decoded.Store(&decodedValue[T]{value: value})
+	return Envelope[T]{state: state}
 }
 
 // Value returns the summary. Its slices, maps, and pointers remain read-only.
@@ -50,18 +59,18 @@ func (envelope *Envelope[T]) Value() (T, error) {
 	if state == nil {
 		return zero, errNoPayload
 	}
-	if state.imported {
-		state.once.Do(func() {
-			value := new(T)
-			if state.err = Decode(state.data, value); state.err == nil {
-				state.value = value
-			}
-		})
-		if state.err != nil {
-			return zero, state.err
+	decoded := state.decoded.Load()
+	if decoded == nil {
+		decoded = &decodedValue[T]{}
+		decoded.err = Decode(state.data, &decoded.value)
+		if !state.decoded.CompareAndSwap(nil, decoded) {
+			decoded = state.decoded.Load()
 		}
 	}
-	return *state.value, nil
+	if decoded.err != nil {
+		return zero, decoded.err
+	}
+	return decoded.value, nil
 }
 
 // AFact marks the enclosing domain type as an analysis fact.
@@ -86,8 +95,16 @@ func (envelope *Envelope[T]) GobEncode() ([]byte, error) {
 	if state.imported {
 		return state.data, nil
 	}
-	state.once.Do(func() { state.data, state.err = Encode(state.value) })
-	return state.data, state.err
+	state.encoding.Lock()
+	defer state.encoding.Unlock()
+	if state.data == nil {
+		data, err := Encode(&state.decoded.Load().value)
+		if err != nil {
+			return nil, err
+		}
+		state.data = data
+	}
+	return state.data, nil
 }
 
 // GobDecode accepts an encoding after its framing checks and defers the full
