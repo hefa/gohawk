@@ -8,6 +8,7 @@ import (
 
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
+	ssapath "github.com/kojah/gohawk/internal/engine/ssaflow/path"
 	"github.com/kojah/gohawk/internal/engine/ssaflow/ssaflowtest"
 	"golang.org/x/tools/go/ssa"
 )
@@ -487,11 +488,21 @@ func TestBoundedRequirements(t *testing.T) {
 		}
 		return candidates
 	}
+	proveAll := func(proven func(requirementKey) bool, asked *int) func([]requirementKey) []bool {
+		return func(keys []requirementKey) []bool {
+			*asked += len(keys)
+			answers := make([]bool, len(keys))
+			for index, key := range keys {
+				answers[index] = proven(key)
+			}
+			return answers
+		}
+	}
 	t.Run("published limit", func(t *testing.T) {
-		calls := 0
-		got := boundedRequirements(makeCandidates(), func(requirementKey) bool { calls++; return true })
-		if len(got) != heapRequirementLimit || calls != heapRequirementLimit {
-			t.Fatalf("got %d requirements after %d proofs, want %d of each", len(got), calls, heapRequirementLimit)
+		asked := 0
+		got := boundedRequirements(makeCandidates(), proveAll(func(requirementKey) bool { return true }, &asked))
+		if len(got) != heapRequirementLimit || asked != heapRequirementProofLimit {
+			t.Fatalf("got %d requirements from %d questions, want %d from %d", len(got), asked, heapRequirementLimit, heapRequirementProofLimit)
 		}
 		for index, requirement := range got {
 			if requirement.Slot.Root.Index != index {
@@ -500,13 +511,12 @@ func TestBoundedRequirements(t *testing.T) {
 		}
 	})
 	t.Run("proof-work limit", func(t *testing.T) {
-		calls := 0
-		got := boundedRequirements(makeCandidates(), func(key requirementKey) bool {
-			calls++
+		asked := 0
+		got := boundedRequirements(makeCandidates(), proveAll(func(key requirementKey) bool {
 			return key.slot.region.serial == heapRequirementProofLimit
-		})
-		if calls != heapRequirementProofLimit || len(got) != 0 {
-			t.Fatalf("got %d requirements after %d proofs, want none after %d", len(got), calls, heapRequirementProofLimit)
+		}, &asked))
+		if asked != heapRequirementProofLimit || len(got) != 0 {
+			t.Fatalf("got %d requirements from %d questions, want none from %d", len(got), asked, heapRequirementProofLimit)
 		}
 	})
 }
@@ -521,10 +531,22 @@ func exactEverywhere(flag bool) { if flag { mark(); return }; mark() }
 		common := ssaflow.InstructionCall(instruction)
 		return common != nil && ssaflow.CallName(common) == "mark"
 	}
-	if onEveryReturn(function, proofs.NewSearchBudget(0), calls) {
+	honored := func(limit int) bool {
+		outcomes := ssapath.EvaluateObligationsFromEntry(function, ssapath.ObligationBatch{
+			Flow: ssapath.ObligationFlow{Budget: proofs.NewSearchBudget(limit)}, Count: 1,
+			Instruction: func(instruction ssa.Instruction) (ssapath.ObligationMask, ssapath.ObligationMask) {
+				if calls(instruction) {
+					return 1, 0
+				}
+				return 0, 0
+			},
+		})
+		return outcomes[0] == ssapath.ObligationHonored
+	}
+	if honored(0) {
 		t.Fatal("an exhausted path search established a requirement")
 	}
-	if !onEveryReturn(function, proofs.NewSearchBudget(100), calls) {
+	if !honored(100) {
 		t.Fatal("a bounded search missed calls on every return")
 	}
 }

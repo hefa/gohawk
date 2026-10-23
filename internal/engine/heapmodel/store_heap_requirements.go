@@ -84,11 +84,55 @@ func (projection *heapProjection) requirements() []HeapRequirement {
 			key: key, requirement: HeapRequirement{Slot: at, Kind: key.kind, Method: key.method},
 		})
 	}
-	return boundedRequirements(candidates, func(key requirementKey) bool {
-		return onEveryReturn(projection.graph.function, proofs.NewSearchBudget(heapRequirementStateBudget), func(instruction ssa.Instruction) bool {
-			return slices.Contains(calls[instruction], key)
-		})
+	return boundedRequirements(candidates, func(keys []requirementKey) []bool {
+		return onEveryReturnBatch(projection.graph.function, keys, calls)
 	})
+}
+
+// onEveryReturnBatch answers onEveryReturn for each key at once: whether a
+// call the key names precedes every normal return. The walk has the allowance
+// the keys' separate walks had together.
+func onEveryReturnBatch(function *ssa.Function, keys []requirementKey, calls map[ssa.Instruction][]requirementKey) []bool {
+	proven := make([]bool, len(keys))
+	position := make(map[requirementKey]int, len(keys))
+	for index, key := range keys {
+		position[key] = index
+	}
+	mask := func(instruction ssa.Instruction) ssapath.ObligationMask {
+		var named ssapath.ObligationMask
+		for _, key := range calls[instruction] {
+			if index, ok := position[key]; ok {
+				named |= 1 << index
+			}
+		}
+		return named
+	}
+	// A function that never returns, or never makes such a call, requires
+	// nothing; the walk alone would call that vacuously honored.
+	var acted ssapath.ObligationMask
+	hasReturn := false
+	for _, block := range function.Blocks {
+		for _, instruction := range block.Instrs {
+			if _, ok := instruction.(*ssa.Return); ok {
+				hasReturn = true
+			}
+			acted |= mask(instruction)
+		}
+	}
+	if !hasReturn || acted == 0 {
+		return proven
+	}
+	budget := proofs.NewSearchBudget(heapRequirementStateBudget * len(keys))
+	outcomes := ssapath.EvaluateObligationsFromEntry(function, ssapath.ObligationBatch{
+		Flow: ssapath.ObligationFlow{Budget: budget}, Count: len(keys),
+		Instruction: func(instruction ssa.Instruction) (ssapath.ObligationMask, ssapath.ObligationMask) {
+			return mask(instruction), 0
+		},
+	})
+	for index, outcome := range outcomes {
+		proven[index] = acted&(1<<index) != 0 && outcome == ssapath.ObligationHonored
+	}
+	return proven
 }
 
 // A write to the required slot or an ancestor may replace its initial value
@@ -110,17 +154,25 @@ func requirementSlotMayBeWritten(written map[HeapSlot]bool, at HeapSlot) bool {
 // boundedRequirements proves candidates in summary order, stopping once the
 // published limit is full or the proof-work limit is spent. Sorting first
 // keeps both the selected guarantees and the coverage loss deterministic.
-func boundedRequirements(candidates []requirementCandidate, proves func(requirementKey) bool) []HeapRequirement {
+func boundedRequirements(candidates []requirementCandidate, proves func([]requirementKey) []bool) []HeapRequirement {
 	slices.SortFunc(candidates, compareRequirementCandidates)
-	var requirements []HeapRequirement
+	candidates = candidates[:min(len(candidates), heapRequirementProofLimit)]
+	keys := make([]requirementKey, len(candidates))
 	for index, candidate := range candidates {
-		if index >= heapRequirementProofLimit || len(requirements) == heapRequirementLimit {
+		keys[index] = candidate.key
+	}
+	var requirements []HeapRequirement
+	if len(keys) == 0 {
+		return requirements
+	}
+	proven := proves(keys)
+	for index, candidate := range candidates {
+		if len(requirements) == heapRequirementLimit {
 			break
 		}
-		if !proves(candidate.key) {
-			continue
+		if proven[index] {
+			requirements = append(requirements, candidate.requirement)
 		}
-		requirements = append(requirements, candidate.requirement)
 	}
 	return requirements
 }
@@ -260,16 +312,4 @@ func (projection *heapProjection) receiverRequirements(common *ssa.CallCommon) [
 		keys = append(keys, requirementKey{slot: target, kind: HeapRequiresNonNil})
 	}
 	return keys
-}
-
-// onEveryReturn reports whether an instruction the predicate accepts
-// precedes every normal return: the every-return polarity of the
-// completion search, asked of the flow directly. A function that never
-// returns, or never makes such a call, requires nothing.
-func onEveryReturn(function *ssa.Function, budget *proofs.SearchBudget, calls func(ssa.Instruction) bool) bool {
-	if !ssaflow.HasReturnAndAction(function.Blocks, calls) {
-		return false
-	}
-	flow := ssapath.ObligationFlow{Instruction: ssapath.ExactOrNone(calls), Budget: budget}
-	return ssapath.EvaluateObligationFromEntry(function, flow) == ssapath.ObligationHonored
 }

@@ -2,12 +2,14 @@ package lifecyclefacts
 
 import (
 	"go/types"
+	"slices"
 
 	"github.com/kojah/gohawk/internal/engine/heapmodel"
 	"github.com/kojah/gohawk/internal/engine/lifecycle"
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
 	ssacall "github.com/kojah/gohawk/internal/engine/ssaflow/calls"
+	ssapath "github.com/kojah/gohawk/internal/engine/ssaflow/path"
 	"github.com/kojah/gohawk/internal/engine/syntax"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ssa"
@@ -250,33 +252,49 @@ func releasedFields(pass *analysis.Pass, function *ssa.Function) FieldMask {
 	if structure == nil {
 		return 0
 	}
-	var released FieldMask
+	// Each field the method loads and could release is one every-return
+	// question; a field it never loads cannot be released by it.
+	type releasable struct {
+		index   int
+		loads   []ssa.Value
+		cleanup []string
+	}
+	var fields []releasable
 	for index := range structure.NumFields() {
 		cleanup, ok := typeCleanup(structure.Field(index).Type())
 		if !ok {
 			continue
 		}
-		// A field the method never loads cannot be released by it.
-		loads := fieldLoads(receiver, index)
-		if len(loads) == 0 {
-			continue
+		if loads := fieldLoads(receiver, index); len(loads) != 0 {
+			fields = append(fields, releasable{index: index, loads: loads, cleanup: cleanup})
 		}
-		// The coverage walk asks about an instruction once per path state
-		// that reaches it; each answer depends only on the instruction, and
-		// each completion proof has its own budget, so one answer serves.
-		answers := map[ssa.Instruction]bool{}
+	}
+	var released FieldMask
+	for chunk := range slices.Chunk(fields, ssapath.MaxObligationCandidates) {
+		// The fields are asked together in one walk. The walk asks about an
+		// instruction once per path state that reaches it; each answer
+		// depends only on the instruction, and each completion proof has its
+		// own budget, so one answer serves.
+		answers := map[ssa.Instruction]ssapath.ObligationMask{}
+		releases := func(instruction ssa.Instruction) ssapath.ObligationMask {
+			mask, ok := answers[instruction]
+			if !ok {
+				for bit, field := range chunk {
+					if releasesField(pass, instruction, field.loads, field.cleanup) {
+						mask |= 1 << bit
+					}
+				}
+				answers[instruction] = mask
+			}
+			return mask
+		}
 		// A panic-only placeholder cannot define the owner's cleanup contract:
 		// lack of a normal return does not witness release of any field.
 		// https://github.com/talostrading/sonic/blob/fa70f8c39b9eea68e782c4c7f3604fe232d4301c/multicast/peer.go#L262-L264
-		if lifecycle.MethodCallCoverage(function, func(instruction ssa.Instruction) bool {
-			answer, ok := answers[instruction]
-			if !ok {
-				answer = releasesField(pass, instruction, loads, cleanup)
-				answers[instruction] = answer
+		for bit, covered := range lifecycle.EveryReturnCoverage(function, len(chunk), releases) {
+			if covered {
+				released |= fieldMaskFor(chunk[bit].index)
 			}
-			return answer
-		}, lifecycle.CoverageEveryReturn, nil) {
-			released |= fieldMaskFor(index)
 		}
 	}
 	return released

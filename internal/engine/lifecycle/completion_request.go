@@ -199,3 +199,38 @@ func proveMethodReturnCoverageWithin(
 	}
 	return proofs.Proof{State: proofs.EvidenceProven, Reason: proofs.EvidenceCalledCompletion}
 }
+
+// EveryReturnCoverage is MethodCallCoverage with CoverageEveryReturn for
+// count questions about one function at once: whether some instruction calls
+// marks with candidate's bit precedes every normal return. Like each separate
+// question it needs a normal return and the candidate's action somewhere in
+// the body, and walks without a budget; the paths are walked once for all.
+func EveryReturnCoverage(function *ssa.Function, count int, calls func(ssa.Instruction) ssapath.ObligationMask) []bool {
+	covered := make([]bool, count)
+	if function == nil || len(function.Blocks) == 0 || count == 0 {
+		return covered
+	}
+	var acted ssapath.ObligationMask
+	hasReturn := false
+	for _, block := range function.Blocks {
+		for _, instruction := range block.Instrs {
+			if _, ok := instruction.(*ssa.Return); ok {
+				hasReturn = true
+			}
+			acted |= calls(instruction)
+		}
+	}
+	if !hasReturn || acted == 0 {
+		return covered
+	}
+	outcomes := ssapath.EvaluateObligationsFromEntry(function, ssapath.ObligationBatch{
+		Count: count,
+		Instruction: func(instruction ssa.Instruction) (ssapath.ObligationMask, ssapath.ObligationMask) {
+			return calls(instruction), 0
+		},
+	})
+	for index, outcome := range outcomes {
+		covered[index] = acted&(1<<index) != 0 && outcome == ssapath.ObligationHonored
+	}
+	return covered
+}

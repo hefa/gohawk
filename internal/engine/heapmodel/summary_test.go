@@ -157,17 +157,21 @@ func TestSummarySortCompatibility(t *testing.T) {
 			var wantCalls, gotCalls []requirementKey
 			var wantPublished []HeapRequirement
 			for index, candidate := range want {
-				if index >= heapRequirementProofLimit || len(wantPublished) == heapRequirementLimit {
+				if index >= heapRequirementProofLimit {
 					break
 				}
 				wantCalls = append(wantCalls, candidate.key)
-				if candidate.key.slot.region.serial%2 == 0 {
+				if candidate.key.slot.region.serial%2 == 0 && len(wantPublished) < heapRequirementLimit {
 					wantPublished = append(wantPublished, candidate.requirement)
 				}
 			}
-			got := boundedRequirements(slices.Clone(requirements), func(key requirementKey) bool {
-				gotCalls = append(gotCalls, key)
-				return key.slot.region.serial%2 == 0
+			got := boundedRequirements(slices.Clone(requirements), func(keys []requirementKey) []bool {
+				gotCalls = append(gotCalls, keys...)
+				proven := make([]bool, len(keys))
+				for index, key := range keys {
+					proven[index] = key.slot.region.serial%2 == 0
+				}
+				return proven
 			})
 			if !slices.Equal(gotCalls, wantCalls) || !slices.Equal(got, wantPublished) {
 				t.Fatal("sorting changed bounded proof order or publication")
