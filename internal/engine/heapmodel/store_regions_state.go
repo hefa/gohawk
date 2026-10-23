@@ -287,7 +287,7 @@ func (graph *regionGraph) mergeContents(state, other *regionState, backEdge bool
 	}
 	for target := range state.contents {
 		if _, present := other.contents[target]; !present {
-			implicit := graph.content(other, target)
+			implicit := graph.contentView(other, target)
 			if !state.contents[target].absorbs(implicit, stale) {
 				mine := state.writable(target)
 				for pointee, pointeeStale := range implicit {

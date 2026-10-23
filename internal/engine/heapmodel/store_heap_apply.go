@@ -81,7 +81,7 @@ func (graph *regionGraph) applyEscapes(state *regionState, summary HeapSummary, 
 		if effect.Slot.Path != "" {
 			contents := pointees{}
 			for held, stale := range set {
-				for pointee, pointeeStale := range graph.content(state, held) {
+				for pointee, pointeeStale := range graph.contentView(state, held) {
 					contents.add(pointee, stale || pointeeStale)
 				}
 			}
@@ -202,7 +202,7 @@ func (substitution *heapSubstitution) targets(target HeapTarget, at HeapSlot) (p
 		// Whatever the caller holds at the slot: its content, not the slot.
 		result := pointees{}
 		for held, stale := range substitution.slots(target.Slot) {
-			for pointee, pointeeStale := range substitution.graph.content(substitution.state, held) {
+			for pointee, pointeeStale := range substitution.graph.contentView(substitution.state, held) {
 				result.add(pointee, stale || pointeeStale)
 			}
 		}

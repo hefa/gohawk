@@ -244,7 +244,7 @@ func (graph *regionGraph) load(state *regionState, addresses pointees, loaded ss
 	}
 	result := pointees{}
 	for address, stale := range addresses {
-		for pointee, pointeeStale := range graph.content(state, address) {
+		for pointee, pointeeStale := range graph.contentView(state, address) {
 			result.add(pointee, stale || pointeeStale)
 			if pointee.region.kind == regionPlaceholder && pointee.region.origin == nil {
 				// The first load that produced the placeholder names it.
@@ -337,7 +337,7 @@ func (graph *regionGraph) selectedSnapshot(state *regionState, address slot, sta
 		for offset := range view.size {
 			element := joinSlotPath(parentPath(address.path), "index:"+strconv.FormatInt(view.offset+offset, 10))
 			source := slot{region: address.region, path: joinSlotPath(element, path)}
-			for target, old := range graph.content(state, source) {
+			for target, old := range graph.contentView(state, source) {
 				contents.add(target, stale || old)
 			}
 		}

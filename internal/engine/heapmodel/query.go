@@ -429,7 +429,7 @@ func (graph *regionGraph) storedPath(root, target ssa.Value, at ssa.Instruction)
 		if len(relative) > 2 {
 			continue
 		}
-		if held, ok := singleSlot(graph.content(state, candidate)); ok && held == wanted {
+		if held, ok := singleSlot(graph.contentView(state, candidate)); ok && held == wanted {
 			return relative, true
 		}
 	}
@@ -451,7 +451,7 @@ func (graph *regionGraph) valueAtPath(root ssa.Value, path []string, at ssa.Inst
 		return nil, false
 	}
 	target := slot{region: base.region, path: joinSlotPath(base.path, ssaflow.JoinAccessPath(path))}
-	held, ok := singleSlot(graph.content(state, target))
+	held, ok := singleSlot(graph.contentView(state, target))
 	if !ok {
 		return nil, false
 	}

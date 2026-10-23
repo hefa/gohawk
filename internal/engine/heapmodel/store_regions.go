@@ -231,6 +231,8 @@ type regionGraph struct {
 	unkR   *region
 	// ids number instructions and blocks so stamps are stable.
 	ids map[ssa.Instruction]int
+	// singletons holds the read-only one-object sets contentView answers.
+	singletons map[slot]pointees
 	// disjoint records every disjointness answer for the heap dump, only
 	// while RecordAliasDecisions is on.
 	disjoint []AliasDecision

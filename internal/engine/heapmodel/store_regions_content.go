@@ -88,33 +88,91 @@ func (graph *regionGraph) contentFollowing(state *regionState, target slot, path
 // backing snapshot's content; nil for an untouched local; a placeholder for
 // an object the function did not allocate.
 func (graph *regionGraph) unwritten(state *regionState, target slot, path []slot) pointees {
-	if stamp, ok := graph.clobberedBeneath(state, target); ok {
-		return pointees{{region: graph.placeholder(target, versionStamp{epoch: stamp})}: false}
+	if member, ok := graph.unwrittenSole(state, target); ok {
+		return pointees{member: false}
 	}
 	if backing, rest, ok := graph.backingOf(state, target); ok {
 		return graph.contentFollowing(state, slot{region: backing, path: rest}, append(path, target))
 	}
+	source := target.region.source
+	return graph.contentFollowing(state, slot{region: source.region, path: joinSlotPath(source.path, target.path)}, append(path, target))
+}
+
+// unwrittenSole returns the one object an unwritten slot holds, unless the
+// answer follows a backing copy or a snapshot of a snapshot, which unwritten
+// resolves by reading that slot instead.
+func (graph *regionGraph) unwrittenSole(state *regionState, target slot) (slot, bool) {
+	if stamp, ok := graph.clobberedBeneath(state, target); ok {
+		return slot{region: graph.placeholder(target, versionStamp{epoch: stamp})}, true
+	}
+	if _, _, ok := graph.backingOf(state, target); ok {
+		return slot{}, false
+	}
 	switch target.region.kind {
 	case regionSite:
-		return pointees{{region: graph.nilR}: false}
+		return slot{region: graph.nilR}, true
 	case regionSnapshot:
 		source := target.region.source
 		switch {
 		case source.region == nil:
-			return pointees{{region: graph.unkR}: false}
+			return slot{region: graph.unkR}, true
 		case source.region.kind == regionSnapshot:
-			return graph.contentFollowing(state, slot{region: source.region, path: joinSlotPath(source.path, target.path)}, append(path, target))
+			return slot{}, false
 		case source.region.kind == regionSite:
-			return pointees{{region: graph.nilR}: false}
+			return slot{region: graph.nilR}, true
 		}
 		origin := slot{region: source.region, path: joinSlotPath(source.path, target.path)}
 		stamp := versionStamp{epoch: target.region.stamp.epoch, step: target.region.stamps[stepKey(origin.path)]}
-		return pointees{{region: graph.placeholder(origin, stamp)}: false}
+		return slot{region: graph.placeholder(origin, stamp)}, true
 	case regionExternal, regionOpaque, regionPlaceholder, regionClosure:
-		return pointees{{region: graph.placeholder(target, graph.stampOf(state, target))}: false}
+		return slot{region: graph.placeholder(target, graph.stampOf(state, target))}, true
 	case regionNil, regionUnknown:
 	}
-	return pointees{{region: graph.unkR}: false}
+	return slot{region: graph.unkR}, true
+}
+
+// contentView is content for a caller that only reads the answer. When the
+// slot holds one unwritten object, as most reads in a fixpoint do, it returns
+// a set the graph keeps for that object instead of a fresh one; content built
+// such a set on every read. The result must not be changed.
+func (graph *regionGraph) contentView(state *regionState, target slot) pointees {
+	if member, ok := graph.contentSole(state, target); ok {
+		return graph.singleton(member)
+	}
+	return graph.content(state, target)
+}
+
+// contentSole reports the one object content would return for a slot it
+// answers as unwritten: no entry, no wildcard read, no wildcard element entry.
+func (graph *regionGraph) contentSole(state *regionState, target slot) (slot, bool) {
+	switch target.region.kind {
+	case regionUnknown:
+		return target, true
+	case regionNil:
+		return slot{region: graph.nilR}, true
+	case regionSite, regionExternal, regionOpaque, regionPlaceholder, regionSnapshot, regionClosure:
+	}
+	if len(state.contents[target]) > 0 {
+		return slot{}, false
+	}
+	step := lastStep(target.path)
+	if step == pathStar || isIndexStep(step) && len(state.contents[graph.starSlot(target)]) > 0 {
+		return slot{}, false
+	}
+	return graph.unwrittenSole(state, target)
+}
+
+// singleton returns the graph's read-only set holding exactly member.
+func (graph *regionGraph) singleton(member slot) pointees {
+	set, ok := graph.singletons[member]
+	if !ok {
+		if graph.singletons == nil {
+			graph.singletons = map[slot]pointees{}
+		}
+		set = pointees{member: false}
+		graph.singletons[member] = set
+	}
+	return set
 }
 
 func (graph *regionGraph) starSlot(target slot) slot {

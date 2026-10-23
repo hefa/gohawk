@@ -230,7 +230,7 @@ func (projection *heapProjection) throughLocal(target slot, call ssa.Instruction
 	current := slot{region: target.region}
 	for index, step := range steps {
 		current.path = joinSlotPath(current.path, step)
-		held, ok := singleSlot(projection.graph.content(state, current))
+		held, ok := singleSlot(projection.graph.contentView(state, current))
 		if !ok || held.region.kind == regionNil {
 			return target
 		}
