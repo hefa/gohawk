@@ -10,6 +10,7 @@ import (
 	"reflect"
 
 	"github.com/kojah/gohawk/internal/analysis/factcodec"
+	"github.com/kojah/gohawk/internal/analysis/factscope"
 	"github.com/kojah/gohawk/internal/engine/heapmodel"
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
 
@@ -92,9 +93,11 @@ func run(pass *analysis.Pass) (any, error) {
 	}
 	engine.empty = importEmptyLists(pass)
 	var empties emptyCollector
+	// A function no importer can see is never an importer's callee.
+	visible := factscope.API(pass.Pkg)
 	for _, function := range functions {
 		object := function.Object()
-		if object == nil || !object.Exported() {
+		if object == nil || !object.Exported() || !visible.Contains(object) {
 			continue
 		}
 		probe := trace.For(pass, "concurrencyfacts", "", function.Pos())

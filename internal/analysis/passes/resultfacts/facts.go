@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/kojah/gohawk/internal/analysis/factcodec"
+	"github.com/kojah/gohawk/internal/analysis/factscope"
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
 
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
@@ -58,11 +59,13 @@ func run(pass *analysis.Pass) (any, error) {
 			engine.imported[object] = published
 		}
 	}
+	visible := factscope.API(pass.Pkg)
 	for _, function := range functions {
 		object := function.Object()
 		// A function with no results still has something to say when it
-		// never returns; every other claim needs a result to be about.
-		if object == nil || !object.Exported() {
+		// never returns; every other claim needs a result to be about. One no
+		// importer can see is never an importer's callee.
+		if object == nil || !object.Exported() || !visible.Contains(object) {
 			continue
 		}
 		summary := engine.Function(function, proofs.NewSearchBudget(proofs.SummaryBudget))

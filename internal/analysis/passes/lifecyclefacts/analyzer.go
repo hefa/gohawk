@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/kojah/gohawk/internal/analysis/factcodec"
+	"github.com/kojah/gohawk/internal/analysis/factscope"
 	"github.com/kojah/gohawk/internal/engine/heapmodel"
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
 	ssacall "github.com/kojah/gohawk/internal/engine/ssaflow/calls"
@@ -122,11 +123,14 @@ func summarizePackage(pass *analysis.Pass, importersOnly bool) (any, error) {
 	// function of every dependency.
 	slices.Sort(marker.Bodiless)
 	pass.ExportPackageFact(&publishedPackage{factcodec.Wrap(*marker)})
+	// A method no importer can see is never an importer's callee, so its
+	// fact, and the marker's reading of its absence, are never consulted.
+	visible := factscope.API(pass.Pkg)
 	for _, function := range local {
 		fact := summaries[function]
 		fact.Must.ReturnedView = returnedViews(pass, function, fact, summaries)
 		summaries[function] = fact
-		if !fact.empty() {
+		if !fact.empty() && visible.Contains(function.Object()) {
 			pass.ExportObjectFact(function.Object(), publish(fact))
 		}
 		if fact.Heap != nil {
