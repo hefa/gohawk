@@ -153,21 +153,21 @@ func typeCleanup(value types.Type) ([]string, bool) {
 	return nil, false
 }
 
+// implementsCloser reports whether Close() error is in value's method set.
+// A lookup answers that as the method set would, without building it: it
+// finds no method that needs a pointer receiver value lacks, nor one that a
+// field or an ambiguous promotion hides.
 func implementsCloser(value types.Type) bool {
-	for selection := range types.NewMethodSet(value).Methods() {
-		method, ok := selection.Obj().(*types.Func)
-		if !ok || method.Name() != "Close" {
-			continue
-		}
-		signature, ok := method.Type().(*types.Signature)
-		if !ok || signature.Params().Len() != 0 || signature.Results().Len() != 1 {
-			continue
-		}
-		if types.Identical(signature.Results().At(0).Type(), types.Universe.Lookup("error").Type()) {
-			return true
-		}
+	object, _, _ := types.LookupFieldOrMethod(value, false, nil, "Close")
+	method, ok := object.(*types.Func)
+	if !ok {
+		return false
 	}
-	return false
+	signature, ok := method.Type().(*types.Signature)
+	if !ok || signature.Params().Len() != 0 || signature.Results().Len() != 1 {
+		return false
+	}
+	return types.Identical(signature.Results().At(0).Type(), types.Universe.Lookup("error").Type())
 }
 
 // storedFieldIndices returns the indices of the struct's fields the value is
