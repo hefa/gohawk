@@ -70,7 +70,7 @@ type publication = factcodec.Envelope[Fact]
 // Analyzer exports complete effects and provides a shared engine to consumers.
 var Analyzer = &analysis.Analyzer{
 	Name: "concurrencyfacts", Doc: "exports bounded ordered synchronization effects",
-	Requires: []*analysis.Analyzer{buildssa.Analyzer}, FactTypes: []analysis.Fact{new(publishedFact)},
+	Requires: []*analysis.Analyzer{buildssa.Analyzer}, FactTypes: []analysis.Fact{new(publishedFact), new(publishedEmpty)},
 	ResultType: reflect.TypeFor[*Engine](), Run: run,
 }
 
@@ -90,6 +90,8 @@ func run(pass *analysis.Pass) (any, error) {
 			engine.facts[object] = published
 		}
 	}
+	engine.empty = importEmptyLists(pass)
+	var empties emptyCollector
 	for _, function := range functions {
 		object := function.Object()
 		if object == nil || !object.Exported() {
@@ -100,11 +102,14 @@ func run(pass *analysis.Pass) (any, error) {
 		fact, ok := engine.exportFunction(function, proofs.NewSearchBudget(exportBudget))
 		outcome, reason := trace.OutcomeUnknown, ReasonExportUnknown
 		if ok {
-			pass.ExportObjectFact(object, &publishedFact{factcodec.Wrap(fact)})
+			if !emptyFact(fact) || !empties.add(object.(*types.Func)) {
+				pass.ExportObjectFact(object, &publishedFact{factcodec.Wrap(fact)})
+			}
 			outcome, reason = trace.OutcomeAccepted, ReasonExportComplete
 		}
 		probe.Decision(trace.Step{Reason: reason.String(), Outcome: outcome, Pos: function.Pos()})
 	}
+	empties.publish(pass)
 	return engine, nil
 }
 
@@ -236,6 +241,9 @@ func (engine *Engine) importedCall(call ssa.CallInstruction, function *ssa.Funct
 	}
 	published, ok := engine.facts[object]
 	if !ok {
+		if engine.empty.listed(object) {
+			return engine.bindDeclaration(call, Fact{Version: factVersion})
+		}
 		return unknown
 	}
 	// A fact that does not decode, or from another version, is unknown.

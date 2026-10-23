@@ -25,6 +25,7 @@ type Engine struct {
 	budget    *proofs.SearchBudget
 	storage   *heapmodel.Storage
 	facts     map[*types.Func]*publishedFact
+	empty     emptyLists
 	// fields is shared by every query of the engine; see identity.go.
 	fields *fieldInventory
 }
@@ -65,7 +66,7 @@ func unavailableSummary(reason ssacall.SummaryUnavailable) Summary {
 
 func (engine *Engine) query(budget *proofs.SearchBudget) *Engine {
 	return &Engine{
-		summaries: engine.summaries, facts: engine.facts, budget: budget, storage: heapmodel.NewStorage(budget), paths: true,
+		summaries: engine.summaries, facts: engine.facts, empty: engine.empty, budget: budget, storage: heapmodel.NewStorage(budget), paths: true,
 		fields: engine.fields,
 	}
 }
