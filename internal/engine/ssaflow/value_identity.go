@@ -27,27 +27,43 @@ func StructurallyIdenticalWithin(left, right ssa.Value, budget *proofs.SearchBud
 		return true
 	}
 	forms := TransparentChangeInterface | TransparentChangeType | TransparentConvert | TransparentMakeInterface
+	if reachingLeaf(left, forms) && reachingLeaf(right, forms) {
+		// Each walk below would spend one visit and fold only its value.
+		// Most comparisons are of two such leaves; answer them without the
+		// walks, which were most of what reaching folds allocated.
+		for range 2 {
+			if !budget.Spend() {
+				return false
+			}
+		}
+		return identicalLeaves(left, right, budget) && !budget.Exhausted()
+	}
 	return NewReachingWalk(forms).Within(budget).Every(left, func(_ ReachingWalk, left ssa.Value) bool {
 		return NewReachingWalk(forms).Within(budget).Every(right, func(_ ReachingWalk, right ssa.Value) bool {
-			if left == right {
-				return true
-			}
-			switch left := left.(type) {
-			case *ssa.FieldAddr:
-				other, ok := right.(*ssa.FieldAddr)
-				return ok && left.Field == other.Field && StructurallyIdenticalWithin(left.X, other.X, budget)
-			case *ssa.IndexAddr:
-				other, ok := right.(*ssa.IndexAddr)
-				if !ok || !StructurallyIdenticalWithin(left.X, other.X, budget) {
-					return false
-				}
-				a, aOK := ConstantIndex(left.Index)
-				b, bOK := ConstantIndex(other.Index)
-				return aOK && bOK && a == b || left.Index == other.Index
-			}
-			return false
+			return identicalLeaves(left, right, budget)
 		})
 	})
+}
+
+// identicalLeaves compares two values a structural identity walk reached.
+func identicalLeaves(left, right ssa.Value, budget *proofs.SearchBudget) bool {
+	if left == right {
+		return true
+	}
+	switch left := left.(type) {
+	case *ssa.FieldAddr:
+		other, ok := right.(*ssa.FieldAddr)
+		return ok && left.Field == other.Field && StructurallyIdenticalWithin(left.X, other.X, budget)
+	case *ssa.IndexAddr:
+		other, ok := right.(*ssa.IndexAddr)
+		if !ok || !StructurallyIdenticalWithin(left.X, other.X, budget) {
+			return false
+		}
+		a, aOK := ConstantIndex(left.Index)
+		b, bOK := ConstantIndex(other.Index)
+		return aOK && bOK && a == b || left.Index == other.Index
+	}
+	return false
 }
 
 type identitySteps = []string
