@@ -146,12 +146,14 @@ func diamonds(a chan int, x, y bool) {
 			}
 		})
 	}
+	// The summary spends a budget of its own. A caller that cannot pay for the
+	// lookup learns no effects and does not poison the cache; one step is enough.
 	engine := NewEngine()
-	if result := engine.Function(pkg.Func("diamonds"), proofs.NewSearchBudget(1)); result.Reason != ReasonBudgetExhausted {
-		t.Fatalf("small branch budget: %+v", result)
+	if result := engine.Function(pkg.Func("diamonds"), proofs.NewSearchBudget(0)); result.Reason != ReasonBudgetExhausted || len(result.Operations) != 0 {
+		t.Fatalf("unaffordable branch summary: %+v", result)
 	}
-	if result := engine.Function(pkg.Func("diamonds"), proofs.NewSearchBudget(2000)); result.Reason != ReasonNone {
-		t.Fatalf("budget-shortened branch summary poisoned cache: %+v", result)
+	if result := engine.Function(pkg.Func("diamonds"), proofs.NewSearchBudget(1)); result.Reason != ReasonNone || len(result.Operations) != 2 {
+		t.Fatalf("refused lookup poisoned the branch summary: %+v", result)
 	}
 }
 

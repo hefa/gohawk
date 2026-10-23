@@ -114,17 +114,18 @@ func lockWalkBudgetPackage(t *testing.T) *ssa.Package {
  `)
 }
 
-func TestLockSuccessorResultInferenceSharesAllowance(t *testing.T) {
+func TestLockSuccessorResultInferenceOwnsAllowance(t *testing.T) {
 	pkg := ssaflowtest.BuildPackage(t, "lockbranches", `package lockbranches
  var total int
  func allowed()bool {`+strings.Repeat("total++\n", 50)+`return true}
+ func heavy()bool {`+strings.Repeat("total++\n", proofs.SummaryBudget)+`return true}
  func root(){if allowed(){total++}}
+ func heavyRoot(){if heavy(){total++}}
  `)
 	fn := pkg.Func("root")
 	state := lockFlowState{block: fn.Blocks[0]}
 	pass := &analysis.Pass{Fset: fn.Prog.Fset, Pkg: fn.Pkg.Pkg}
-	// Measure ordinary successor setup independently of result inference. The
-	// extra allowance below fits that setup but cannot fit the padded callee.
+	// Measure ordinary successor setup independently of result inference.
 	setup := 0
 	for ; setup < proofs.QueryBudget; setup++ {
 		budget := proofs.NewSearchBudget(setup)
@@ -136,16 +137,38 @@ func TestLockSuccessorResultInferenceSharesAllowance(t *testing.T) {
 	if setup == proofs.QueryBudget {
 		t.Fatal("ordinary branch never completed")
 	}
+	// The result summary spends a budget of its own; the walk pays a few
+	// lookup steps. A walk that cannot pay them keeps no successor, and its
+	// refusal is not cached: once the lookup is affordable the padded callee
+	// prunes the false branch, whichever allowances failed before.
 	pass.ResultOf = map[*analysis.Analyzer]any{resultfacts.Analyzer: resultfacts.NewEngine()}
 	pool := proofs.NewSearchBudget(10 * proofs.SummaryBudget)
-	child := pool.Within(setup + 10)
-	if got := lockSuccessorStates(pass, state, child); len(got) != 0 || !child.Exhausted() || pool.Exhausted() {
-		t.Fatalf("nested result cutoff kept %d successors; exhausted=%v/%v", len(got), child.Exhausted(), pool.Exhausted())
+	pruned := false
+	for limit := 0; limit <= setup+10; limit++ {
+		child := pool.Within(limit)
+		got := lockSuccessorStates(pass, state, child)
+		if child.Exhausted() {
+			if len(got) != 0 || pool.Exhausted() || pruned {
+				t.Fatalf("cut%d kept %d successors; pool exhausted=%v, after pruning=%v", limit, len(got), pool.Exhausted(), pruned)
+			}
+			continue
+		}
+		if len(got) != 1 || got[0].block != state.block.Succs[0] {
+			t.Fatalf("limit%d result branch: %+v", limit, got)
+		}
+		pruned = true
 	}
-	fresh := pool.Within(proofs.SummaryBudget)
-	got := lockSuccessorStates(pass, state, fresh)
-	if fresh.Exhausted() || len(got) != 1 || got[0].block != state.block.Succs[0] {
-		t.Fatalf("fresh result branch: %+v", got)
+	if !pruned {
+		t.Fatal("result branch never pruned")
+	}
+	// A callee larger than the summary's own budget proves nothing, so both
+	// branches stay feasible for a small or a large walk.
+	heavy := lockFlowState{block: pkg.Func("heavyRoot").Blocks[0]}
+	for _, limit := range []int{setup + 10, proofs.SummaryBudget} {
+		child := pool.Within(limit)
+		if got := lockSuccessorStates(pass, heavy, child); child.Exhausted() || len(got) != 2 {
+			t.Fatalf("exhausted result summary pruned a branch at %d: %+v", limit, got)
+		}
 	}
 }
 
@@ -155,20 +178,41 @@ func TestLockWalkTerminationResultCutoff(t *testing.T) {
  var mu sync.Mutex
  var total int
  func stop(){`+strings.Repeat("total++\n", 30)+`panic("stop")}
+ func heavyStop(){`+strings.Repeat("total++\n", proofs.SummaryBudget)+`panic("stop")}
  func root(){mu.Lock();stop()}
+ func heavyRoot(){mu.Lock();heavyStop()}
  `)
-	fixture := newLockWalkFixture(pkg.Func("root"))
-	// Cold result inference must share the caller's allowance. Warm summaries
-	// may be cheaper, but cannot change the termination guarantee itself.
-	limited := proofs.NewSearchBudget(30)
-	if ok, reports, edges := fixture.run(limited); ok || !limited.Exhausted() || len(reports) != 0 || edges != 0 {
-		t.Fatalf("termination cutoff complete=%v reports=%v edges=%d", ok, reports, edges)
-	}
-	for range 2 {
-		fresh := proofs.NewSearchBudget(lockStateWorkBudget)
-		if ok, reports, edges := fixture.run(fresh); !ok || fresh.Exhausted() || len(reports) != 0 || edges != 0 {
-			t.Fatalf("fresh terminating path complete=%v reports=%v edges=%d", ok, reports, edges)
+	// The stop summary spends a budget of its own, so the walk costs the same
+	// whether the summary is cold or cached, and a walk cut short anywhere
+	// keeps no evidence.
+	cutoff := func(fixture func() *lockWalkFixture) int {
+		for limit := range lockStateWorkBudget {
+			budget := proofs.NewSearchBudget(limit)
+			ok, reports, edges := fixture().run(budget)
+			if !ok && (!budget.Exhausted() || len(reports) != 0 || edges != 0) {
+				t.Fatalf("termination cutoff%d complete=%v reports=%v edges=%d", limit, ok, reports, edges)
+			}
+			if ok {
+				if budget.Exhausted() || len(reports) != 0 || edges != 0 {
+					t.Fatalf("terminating path at%d complete=%v reports=%v edges=%d", limit, ok, reports, edges)
+				}
+				return limit
+			}
 		}
+		t.Fatal("terminating path never completes")
+		return 0
+	}
+	warm := newLockWalkFixture(pkg.Func("root"))
+	warm.run(proofs.NewSearchBudget(lockStateWorkBudget))
+	cold := cutoff(func() *lockWalkFixture { return newLockWalkFixture(pkg.Func("root")) })
+	if cached := cutoff(func() *lockWalkFixture { return warm }); cold == 0 || cached != cold {
+		t.Fatalf("walk cost depends on the summary cache: cold=%d warm=%d", cold, cached)
+	}
+	// A callee larger than the summary's own budget is not known to stop,
+	// and that changes no evidence the walk reports.
+	heavy := proofs.NewSearchBudget(lockStateWorkBudget)
+	if ok, reports, edges := newLockWalkFixture(pkg.Func("heavyRoot")).run(heavy); !ok || heavy.Exhausted() || len(reports) != 0 || edges != 0 {
+		t.Fatalf("exhausted termination summary complete=%v reports=%v edges=%d", ok, reports, edges)
 	}
 }
 

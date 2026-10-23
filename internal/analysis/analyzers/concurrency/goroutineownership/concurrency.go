@@ -25,6 +25,7 @@ type summaryJoinProof struct {
 func (analysis *spawnAnalysis) summarizedJoin(instruction ssa.Instruction) (helperCallProof, bool) {
 	engine, _ := summaryKnowledge.Provider(analysis.pass).Concurrency()
 	budget := analysis.queryBudget(helperUseBudget)
+	interrupted := false
 	for _, tracked := range analysis.tracked {
 		if !budget.Spend() {
 			break
@@ -34,6 +35,13 @@ func (analysis *spawnAnalysis) summarizedJoin(instruction ssa.Instruction) (help
 		}
 		proof := proveSummaryJoin(engine, instruction, tracked.value, tracked.kind, budget)
 		if budget.Exhausted() {
+			break
+		}
+		if proof.summaryCause == concurrencyfacts.ReasonBudgetExhausted {
+			// The callee's summary ran out of its own allowance: as
+			// interrupted as an exhausted query, and kept on this
+			// instruction the same way.
+			interrupted = true
 			break
 		}
 		if proof.joined {
@@ -49,7 +57,7 @@ func (analysis *spawnAnalysis) summarizedJoin(instruction ssa.Instruction) (help
 	}
 	// An interrupted summary cannot establish absent completion. Keep the
 	// uncertainty on this instruction so unrelated return paths remain open.
-	if budget.Exhausted() {
+	if budget.Exhausted() || interrupted {
 		budget.Observe(proofs.EvidenceBudgetExhausted, analysis.spawn.Pos(), func() map[string]string {
 			return map[string]string{"phase": "summary-join"}
 		})

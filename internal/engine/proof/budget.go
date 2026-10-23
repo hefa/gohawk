@@ -87,6 +87,19 @@ func (budget *SearchBudget) Spend() bool {
 	return true
 }
 
+// Own returns a fresh budget of limit for a question whose answer must not
+// depend on who asked it, such as a memoized function summary: it keeps this
+// budget's observer, but charges neither this budget nor its pool, so the
+// question costs and concludes the same whichever caller asks it first. A
+// nil budget yields a plain one.
+func (budget *SearchBudget) Own(limit int) *SearchBudget {
+	own := NewSearchBudget(limit)
+	if budget != nil {
+		own.observer = budget.observer
+	}
+	return own
+}
+
 // Observed attaches an observer that hears each give-up of a proof spending
 // this budget, and returns the budget so a query can be built inline. A nil
 // observer leaves the budget silent; a nil budget stays unbounded and silent.

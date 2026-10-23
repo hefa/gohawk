@@ -70,6 +70,12 @@ type FunctionSummaries[Summary any] struct {
 	memo        *CallGraphMemo[*ssa.Function, Summary]
 	compute     func(*ssa.Function, *proofs.SearchBudget) Summary
 	unavailable func(SummaryUnavailable) Summary
+	// limit, when set, gives each summary a budget of its own; see
+	// NewOwnedFunctionSummaries. Such summaries treat recursion by
+	// component: graph numbers them and active marks those being summarized.
+	limit  int
+	graph  components
+	active map[int]bool
 }
 
 // NewFunctionSummaries fixes the computation and conservative fallback for a
@@ -86,15 +92,72 @@ func NewFunctionSummaries[Summary any](
 	}
 }
 
+// NewOwnedFunctionSummaries is NewFunctionSummaries where every summary is
+// computed with a budget of its own, limit instructions, rather than with what
+// the asking caller has left. A summary is then a function of its body and
+// its callees' summaries alone: it completes or runs out the same way
+// whichever caller asks first, so an exhausted answer is as reusable as a
+// completed one and is cached too. The asking caller is charged one step.
+// Recursion is treated by component (see components), so recursive answers
+// are kept too; only a cycle the static call graph cannot see is not.
+func NewOwnedFunctionSummaries[Summary any](
+	compute func(*ssa.Function, *proofs.SearchBudget) Summary,
+	unavailable func(SummaryUnavailable) Summary,
+	limit int,
+) *FunctionSummaries[Summary] {
+	summaries := NewFunctionSummaries(compute, unavailable)
+	summaries.limit = limit
+	return summaries
+}
+
 // Function returns the symbolic summary of function. Completed answers can be
 // reused with a fresh budget; exhaustion during a computation discards its
 // entire answer, including any partial effects. Recursion is not a fixed-point
 // solver: the analyzer's fallback determines what a cut can safely contribute.
 func (summaries *FunctionSummaries[Summary]) Function(function *ssa.Function, budget *proofs.SearchBudget) Summary {
+	if summaries.limit > 0 {
+		return summaries.owned(function, budget)
+	}
 	return summaries.memo.Summarize(function, function, budget, func() Summary {
 		return summaries.compute(function, budget)
 	}, func(reason SummaryUnavailable, _ Summary) Summary {
 		return summaries.unavailable(reason)
+	})
+}
+
+// owned answers Function for summaries with budgets of their own.
+func (summaries *FunctionSummaries[Summary]) owned(function *ssa.Function, budget *proofs.SearchBudget) Summary {
+	if function == nil || len(function.Blocks) == 0 {
+		observeUnavailable(budget, SummaryBodyUnavailable, function, nil)
+		return summaries.unavailable(SummaryBodyUnavailable)
+	}
+	if !budget.Spend() {
+		observeUnavailable(budget, SummaryBudgetExhausted, function, nil)
+		return summaries.unavailable(SummaryBudgetExhausted)
+	}
+	component := summaries.graph.component(function)
+	if summaries.active[component] {
+		observeUnavailable(budget, SummaryRecursive, function, nil)
+		return summaries.unavailable(SummaryRecursive)
+	}
+	own := budget.Own(summaries.limit)
+	return summaries.memo.Answer(function, func() Summary {
+		var answer Summary
+		if summaries.active == nil {
+			summaries.active = map[int]bool{}
+		}
+		summaries.active[component] = true
+		entered := summaries.memo.WithFunction(function, func() { answer = summaries.compute(function, own) })
+		delete(summaries.active, component)
+		if !entered {
+			observeUnavailable(budget, SummaryRecursive, function, nil)
+			return summaries.unavailable(SummaryRecursive)
+		}
+		if own.Exhausted() {
+			observeUnavailable(own, SummaryBudgetExhausted, function, nil)
+			return summaries.unavailable(SummaryBudgetExhausted)
+		}
+		return answer
 	})
 }
 

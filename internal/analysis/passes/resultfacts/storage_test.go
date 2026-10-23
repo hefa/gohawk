@@ -57,13 +57,32 @@ func TestStoredResultGuarantees(t *testing.T) {
 }
 
 func TestStoredResultBudget(t *testing.T) {
-	pkg := ssaflowtest.BuildPackage(t, "storedresults", storageResultsFixture)
+	pkg := ssaflowtest.BuildPackage(t, "storedresults", `package storedresults
+type box struct { flag bool }
+func marker() {}
+func stable() bool { b := &box{flag: true}; return b.flag }
+func light() bool { b := &box{flag: true}; `+strings.Repeat("marker();", 10)+`return b.flag }
+func heavy() bool { b := &box{flag: true}; `+strings.Repeat("marker();", 2100)+`return b.flag }
+`)
 	engine := NewEngine()
-	if got := engine.Function(pkg.Func("stable"), proofs.NewSearchBudget(3)); got.Result(0) != Unknown {
-		t.Fatal("exhausted query established a result guarantee")
+	// A caller that cannot pay for the lookup learns nothing, and its refusal
+	// does not become the summary a later caller reads.
+	if got := engine.Function(pkg.Func("stable"), proofs.NewSearchBudget(1)); got.Available || got.Result(0) != Unknown {
+		t.Fatal("unaffordable lookup established a result guarantee")
 	}
-	if got := engine.Function(pkg.Func("stable"), proofs.NewSearchBudget(proofs.SummaryBudget)); got.Result(0) != AlwaysTrue {
-		t.Fatal("exhausted query poisoned fresh inference")
+	// The summary has a budget of its own: paying for the lookup is enough.
+	for _, name := range []string{"stable", "light"} {
+		for _, limit := range []int{2, proofs.SummaryBudget} {
+			if got := engine.Function(pkg.Func(name), proofs.NewSearchBudget(limit)); got.Result(0) != AlwaysTrue {
+				t.Fatalf("%s: caller budget %d changed the summary to %v", name, limit, got.Result(0))
+			}
+		}
+	}
+	// A body larger than the summary's own budget is exhausted whoever asks.
+	for _, limit := range []int{2, 4 * proofs.SummaryBudget} {
+		if got := engine.Function(pkg.Func("heavy"), proofs.NewSearchBudget(limit)); got.Available || got.Result(0) != Unknown {
+			t.Fatalf("exhausted summary established a result guarantee for caller budget %d", limit)
+		}
 	}
 }
 

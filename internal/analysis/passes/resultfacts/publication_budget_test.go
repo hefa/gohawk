@@ -61,7 +61,7 @@ func HeavyPredicate(err error, sink *int) bool { ` + strings.Repeat("if err != n
 		if sourceErr != nil {
 			return nil, sourceErr
 		}
-		checkFreshResultProofs(t, result.(*Engine), functions)
+		checkStableResultCutoffs(t, result.(*Engine), functions)
 		return result, nil
 	}
 	analysistest.Run(t, directory, &probe, "publication")
@@ -83,33 +83,21 @@ func checkPublishedResultControls(t *testing.T, facts map[string]Fact) {
 	}
 }
 
-func checkFreshResultProofs(t *testing.T, engine *Engine, functions []*ssa.Function) {
+// checkStableResultCutoffs asks again, with a larger caller budget, for each
+// summary that ran out of its own budget during publication. The summary's
+// budget is its own, so the answer stays the conservative fallback rather than
+// a claim that depends on who asked.
+func checkStableResultCutoffs(t *testing.T, engine *Engine, functions []*ssa.Function) {
 	t.Helper()
 	for _, function := range functions {
-		if function.Name() == "HeavyFold" {
-			got := engine.Function(function, proofs.NewSearchBudget(4*proofs.SummaryBudget))
-			if !got.Available || got.Result(0) != AlwaysNonNil {
-				t.Error("publication cutoff poisoned fresh folded result inference")
-			}
+		if !strings.HasPrefix(function.Name(), "Heavy") {
+			continue
 		}
-		if function.Name() == "HeavyPredicate" {
-			got := engine.Function(function, proofs.NewSearchBudget(4*proofs.SummaryBudget))
-			if !got.Available || !got.Implies(ssacall.ParameterNil(0), 0, ssacall.OutcomeFalse) {
-				t.Error("publication cutoff poisoned fresh conditional inference")
-			}
-		}
-		if function.Name() == "HeavyIdentity" {
-			got := engine.Function(function, proofs.NewSearchBudget(4*proofs.SummaryBudget))
-			parameter, proven := got.ReturnedParameter(0)
-			if !got.Available || !proven || parameter != 0 {
-				t.Error("publication cutoff poisoned fresh returned-parameter inference")
-			}
-		}
-		if function.Name() == "Heavy" {
-			got := engine.Function(function, proofs.NewSearchBudget(2*proofs.SummaryBudget))
-			if !got.Available || !got.NeverReturns() {
-				t.Error("publication cutoff must not poison a fresh complete summary")
-			}
+		got := engine.Function(function, proofs.NewSearchBudget(4*proofs.SummaryBudget))
+		_, returned := got.ReturnedParameter(0)
+		if got.Available || got.NeverReturns() || got.Result(0) != Unknown || returned ||
+			got.Implies(ssacall.ParameterNil(0), 0, ssacall.OutcomeFalse) {
+			t.Errorf("%s: a larger caller budget turned an exhausted summary into a claim: %+v", function.Name(), got)
 		}
 	}
 }

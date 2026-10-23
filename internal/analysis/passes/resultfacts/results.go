@@ -88,9 +88,9 @@ type Engine struct {
 // NewEngine creates local-only result inference with no library-name guesses.
 func NewEngine() *Engine {
 	engine := &Engine{}
-	engine.summaries = ssacall.NewFunctionSummaries(engine.compute, func(reason ssacall.SummaryUnavailable) Summary {
+	engine.summaries = ssacall.NewOwnedFunctionSummaries(engine.compute, func(reason ssacall.SummaryUnavailable) Summary {
 		return Summary{Reason: ReasonSummaryUnavailable}
-	})
+	}, proofs.SummaryBudget)
 	return engine
 }
 

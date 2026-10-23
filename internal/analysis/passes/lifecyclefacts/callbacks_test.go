@@ -52,21 +52,40 @@ func cyclicB(fn func() error) { cyclicA(fn) }
 	}
 }
 
-func TestCallbackInferenceDoesNotCacheExhaustedClaims(t *testing.T) {
+func TestCallbackInferenceExhaustedClaims(t *testing.T) {
 	pkg := buildLifecycleTestSSA(t, `
 package lifecyclefactstest
+func marker() {}
 func invoke(fn func() error) { _ = fn() }
 func forward(fn func() error) { invoke(fn) }
+func light(fn func() error) { `+strings.Repeat("marker();", 10)+`invoke(fn) }
+func heavy(fn func() error) { `+strings.Repeat("marker();", 1000)+`invoke(fn) }
 `)
 	pass := &analysis.Pass{Pkg: pkg.Pkg, ImportObjectFact: func(types.Object, analysis.Fact) bool { return false }}
 	callbacks := newCallbackInference(pass, nil)
-	short := callbacks.invocations.Function(pkg.Func("forward"), proofs.NewSearchBudget(1))
-	if len(short.Discharges) != 0 {
-		t.Fatalf("exhausted summary advertised discharges: %v", short.Discharges)
+	// A caller that cannot pay for the lookup gets no claim, and that refusal
+	// is its own: it does not become the summary a later caller reads.
+	if refused := callbacks.invocations.Function(pkg.Func("forward"), proofs.NewSearchBudget(0)); len(refused.Discharges) != 0 {
+		t.Fatalf("unaffordable lookup advertised discharges: %v", refused.Discharges)
 	}
-	complete := callbacks.invocations.Function(pkg.Func("forward"), proofs.NewSearchBudget(proofs.SummaryBudget))
-	if !complete.InvokedParameters().contains(0) || !complete.SynchronouslyInvoked().contains(0) {
-		t.Fatalf("fresh budget reused an incomplete answer: %v", complete.Discharges)
+	// A summary has a budget of its own, so a caller that can pay one step
+	// reads the same complete answer as a generous one.
+	for _, limit := range []int{1, proofs.SummaryBudget} {
+		complete := callbacks.invocations.Function(pkg.Func("forward"), proofs.NewSearchBudget(limit))
+		if !complete.InvokedParameters().contains(0) || !complete.SynchronouslyInvoked().contains(0) {
+			t.Fatalf("caller budget %d changed the summary: %v", limit, complete.Discharges)
+		}
+	}
+	// A body larger than the summary's own budget is exhausted whoever asks:
+	// it claims nothing for a small or a large caller. The same shape within
+	// the budget is the control that the padding alone does not hide the claim.
+	if light := callbacks.invocations.Function(pkg.Func("light"), proofs.NewSearchBudget(1)); !light.InvokedParameters().contains(0) {
+		t.Fatalf("padded control lost its claim: %v", light.Discharges)
+	}
+	for _, limit := range []int{1, 4 * proofs.SummaryBudget} {
+		if exhausted := callbacks.invocations.Function(pkg.Func("heavy"), proofs.NewSearchBudget(limit)); len(exhausted.Discharges) != 0 {
+			t.Fatalf("exhausted summary advertised discharges for caller budget %d: %v", limit, exhausted.Discharges)
+		}
 	}
 }
 

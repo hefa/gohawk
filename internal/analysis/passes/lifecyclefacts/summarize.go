@@ -278,9 +278,9 @@ type callbackInference struct {
 
 func newCallbackInference(pass *analysis.Pass, completed Summaries) *callbackInference {
 	callbacks := &callbackInference{pass: pass, completed: completed}
-	callbacks.invocations = ssacall.NewFunctionSummaries(callbacks.computeInvocations, func(ssacall.SummaryUnavailable) Fact {
+	callbacks.invocations = ssacall.NewOwnedFunctionSummaries(callbacks.computeInvocations, func(ssacall.SummaryUnavailable) Fact {
 		return Fact{}
-	})
+	}, proofs.SummaryBudget)
 	return callbacks
 }
 

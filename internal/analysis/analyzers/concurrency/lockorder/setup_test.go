@@ -124,21 +124,41 @@ func TestLockSetupNestedSummaryAllowance(t *testing.T) {
   `)
 		fn := pkg.Func("root")
 		pass := lockSetupPass(fn, concurrencyfacts.NewEngine())
-		limit := 100
-		if count > proofs.SummaryBudget {
-			limit = lockStateWorkBudget
-		}
-		budget := proofs.NewSearchBudget(limit)
-		proof := buildLockSetup(pass, fn, budget)
-		if proof.Proven() || proof.setup != nil || proof.Reason != proofs.EvidenceBudgetExhausted || budget.Exhausted() != (count < proofs.SummaryBudget) {
-			t.Fatalf("padded%d setup: %+v exhausted=%v", count, proof, budget.Exhausted())
-		}
-		if count < proofs.SummaryBudget {
-			fresh := buildLockSetup(pass, fn, proofs.NewSearchBudget(lockStateWorkBudget))
-			if !fresh.Proven() || !fresh.setup.hasAcquisition || len(fresh.setup.summaries) != 2 {
-				t.Fatalf("fresh padded setup: %+v", fresh)
+		// Nested summaries spend budgets of their own, so the setup pays one
+		// lookup step per call. A setup that cannot pay keeps nothing, and its
+		// refusal is not cached: a later affordable setup binds the same
+		// summaries as a generous one.
+		finished := false
+		for limit := range 100 {
+			budget := proofs.NewSearchBudget(limit)
+			proof := buildLockSetup(pass, fn, budget)
+			if !proof.Proven() {
+				if proof.setup != nil || proof.Reason != proofs.EvidenceBudgetExhausted || !budget.Exhausted() || finished {
+					t.Fatalf("padded%d cut%d setup: %+v exhausted=%v", count, limit, proof, budget.Exhausted())
+				}
+				continue
 			}
+			finished = true
+			assertNestedSetup(t, count, proof, budget)
 		}
+		if !finished {
+			t.Fatalf("padded%d setup never completed", count)
+		}
+		budget := proofs.NewSearchBudget(lockStateWorkBudget)
+		assertNestedSetup(t, count, buildLockSetup(pass, fn, budget), budget)
+	}
+}
+
+// assertNestedSetup checks a completed nested-summary setup. A summary that
+// exhausted its own budget binds no effects; the call stays incomplete.
+func assertNestedSetup(t *testing.T, count int, proof lockSetupProof, budget *proofs.SearchBudget) {
+	t.Helper()
+	want := 2
+	if count > proofs.SummaryBudget {
+		want = 1
+	}
+	if !proof.Proven() || budget.Exhausted() || !proof.setup.hasAcquisition || len(proof.setup.summaries) != want {
+		t.Fatalf("padded%d setup: %+v exhausted=%v", count, proof, budget.Exhausted())
 	}
 }
 

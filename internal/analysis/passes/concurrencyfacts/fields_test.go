@@ -267,8 +267,11 @@ func TestSpillOrderingSharesPathAllowance(t *testing.T) {
  import "sync"
  type D struct{mu sync.Mutex;n int}
  func padded(d *D)int{f:=func(){_=d.n};_=f;n:=0;` + strings.Repeat("n++;", proofs.QueryBudget+1) + `d.mu.Lock();d.mu.Unlock();return n}
+ func light(d *D)int{f:=func(){_=d.n};_=f;n:=0;` + strings.Repeat("n++;", 10) + `d.mu.Lock();d.mu.Unlock();return n}
+ func heavy(d *D)int{f:=func(){_=d.n};_=f;n:=0;` + strings.Repeat("n++;", exportBudget+1) + `d.mu.Lock();d.mu.Unlock();return n}
  `
-	fn := ssaflowtest.BuildPackage(t, "spillorder", source).Func("padded")
+	pkg := ssaflowtest.BuildPackage(t, "spillorder", source)
+	fn := pkg.Func("padded")
 	field := ssaflow.InstructionsOf[*ssa.FieldAddr](fn)[0]
 	pool := proofs.NewSearchBudget(20 * proofs.SummaryBudget)
 	child := pool.Within(proofs.QueryBudget)
@@ -279,14 +282,23 @@ func TestSpillOrderingSharesPathAllowance(t *testing.T) {
 	if !ok || path.Root != fn.Params[0] {
 		t.Fatalf("fresh path=%+v/%v", path, ok)
 	}
+	// A summary spends a budget of its own: the caller pays one step for the
+	// lookup, and a caller that cannot pay it gets an incomplete answer that
+	// a later caller does not inherit.
 	engine := NewEngine()
-	short := pool.Within(proofs.SummaryBudget)
-	if result := engine.Function(fn, short); result.Complete() || !short.Exhausted() {
-		t.Fatalf("summary cutoff=%+v", result)
+	if result := engine.Function(pkg.Func("light"), pool.Within(0)); result.Complete() {
+		t.Fatalf("unaffordable summary lookup=%+v", result)
 	}
-	fresh := engine.Function(fn, pool.Within(10*proofs.SummaryBudget))
-	if !pairedLock(fresh) {
-		t.Fatalf("fresh summary=%+v", fresh)
+	short := pool.Within(1)
+	if result := engine.Function(pkg.Func("light"), short); !pairedLock(result) || short.Exhausted() {
+		t.Fatalf("one-step summary lookup=%+v", result)
+	}
+	// A body larger than the summary's own budget is incomplete whoever asks.
+	for _, limit := range []int{1, 10 * proofs.SummaryBudget} {
+		caller := pool.Within(limit)
+		if result := engine.Function(pkg.Func("heavy"), caller); result.Complete() || len(result.Operations) != 0 || caller.Exhausted() {
+			t.Fatalf("summary cutoff for caller budget %d=%+v", limit, result)
+		}
 	}
 }
 

@@ -41,14 +41,14 @@ func NewEngine() *Engine {
 // cache policy so exported functions do not pay for paths only graph queries
 // can use. A linear cutoff must not poison the richer query's cache.
 func (engine *Engine) newSummaries(paths bool) *ssacall.FunctionSummaries[Summary] {
-	return ssacall.NewFunctionSummaries(func(function *ssa.Function, budget *proofs.SearchBudget) Summary {
+	return ssacall.NewOwnedFunctionSummaries(func(function *ssa.Function, budget *proofs.SearchBudget) Summary {
 		builder := engine.query(budget)
 		builder.paths = paths
 		if !paths {
 			builder.summaries = engine.linear
 		}
 		return builder.collect(function, false)
-	}, unavailableSummary)
+	}, unavailableSummary, exportBudget)
 }
 
 func unavailableSummary(reason ssacall.SummaryUnavailable) Summary {

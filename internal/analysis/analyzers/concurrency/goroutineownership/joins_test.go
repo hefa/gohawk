@@ -142,29 +142,51 @@ func TestSummaryJoinSharesCandidateAllowance(t *testing.T) {
 	})
 }
 
-func TestSummaryJoinChildCutoffAndFreshCache(t *testing.T) {
-	pkg := ssaflowtest.BuildPackage(t, "summarychild", "package summarychild;func wait(done chan int)int{n:=0;"+
-		strings.Repeat("n++;", helperUseBudget+32)+"<-done;return n};func subject(){done:=make(chan int);go func(){done<-1}();wait(done)}")
-	fn := pkg.Func("subject")
-	call := ssaflow.InstructionsOf[*ssa.Call](fn)[0]
+func TestSummaryJoinChildCutoffAndOwnedSummary(t *testing.T) {
+	subject := func(helper string) string {
+		return "func " + helper + "Subject(){done,other:=make(chan int),make(chan int);go func(){done<-1}();" + helper + "(done,other)};"
+	}
+	pkg := ssaflowtest.BuildPackage(t, "summarychild", "package summarychild;"+
+		"func wait(done,other chan int)int{n:=0;"+strings.Repeat("n++;", helperUseBudget+32)+"<-done;return n};"+
+		"func heavy(done,other chan int)int{n:=0;"+strings.Repeat("n++;", 2*proofs.SummaryBudget)+"<-done;return n};"+
+		subject("wait")+subject("heavy"))
 	engine := concurrencyfacts.NewEngine()
 	pass := &analysis.Pass{Fset: pkg.Prog.Fset, Pkg: pkg.Pkg, ResultOf: map[*analysis.Analyzer]any{concurrencyfacts.Analyzer: engine}}
-	candidate := &spawnAnalysis{
-		pass: pass, function: fn, spawn: ssaflow.InstructionsOf[*ssa.Go](fn)[0],
-		pool: proofs.NewSearchBudget(spawnPoolBudget), tracked: []trackedValue{{value: ssaflow.InstructionsOf[*ssa.MakeChan](fn)[0], kind: trackedSignal}},
+	// decoys tracked values the helper never joins are examined before done.
+	query := func(helper string, decoys int) (*spawnAnalysis, helperCallProof, bool) {
+		fn := pkg.Func(helper + "Subject")
+		channels := ssaflow.InstructionsOf[*ssa.MakeChan](fn)
+		tracked := make([]trackedValue, 0, decoys+1)
+		for range decoys {
+			tracked = append(tracked, trackedValue{value: channels[1], kind: trackedSignal})
+		}
+		candidate := &spawnAnalysis{
+			pass: pass, function: fn, spawn: ssaflow.InstructionsOf[*ssa.Go](fn)[0],
+			pool: proofs.NewSearchBudget(spawnPoolBudget), tracked: append(tracked, trackedValue{value: channels[0], kind: trackedSignal}),
+		}
+		got, decided := candidate.summarizedJoin(ssaflow.InstructionsOf[*ssa.Call](fn)[0])
+		return candidate, got, decided
 	}
-	cutoff, decided := candidate.summarizedJoin(call)
+	// The summary spends a budget of its own, so a helper body larger than the
+	// child allowance costs the candidate one lookup and still joins.
+	if _, got, decided := query("wait", 0); !decided || got.action != actionJoin {
+		t.Fatalf("owned summary lookup returned %+v", got)
+	}
+	// Matching the summary against each tracked value is the child's own
+	// work: running out of it leaves the instruction unknown without draining
+	// the candidate pool.
+	candidate, cutoff, decided := query("wait", helperUseBudget)
 	if !decided || cutoff.action != actionUnknown || cutoff.reason != reasonSummaryJoinBudgetExhausted || candidate.pool.Exhausted() {
 		t.Fatalf("child cutoff with live pool returned %+v, pool exhausted=%v", cutoff, candidate.pool.Exhausted())
 	}
-	// A larger independent engine query may complete the same callee. A child
-	// cutoff must not have cached its interrupted prefix as a final answer.
-	summary := engine.AtCall(call, proofs.NewSearchBudget(proofs.SummaryBudget))
-	if !summary.Complete() {
-		t.Fatalf("fresh engine query unavailable: %+v", summary)
+	// A summary that exhausts its own budget never proves a join, and a
+	// generous engine query does not see a different answer.
+	if _, got, _ := query("heavy", 0); got.action == actionJoin {
+		t.Fatalf("exhausted summary proved a join: %+v", got)
 	}
-	if got, decided := candidate.summarizedJoin(call); !decided || got.action != actionJoin {
-		t.Fatalf("fresh cached summary unavailable: %+v", got)
+	heavy := ssaflow.InstructionsOf[*ssa.Call](pkg.Func("heavySubject"))[0]
+	if summary := engine.AtCall(heavy, proofs.NewSearchBudget(4*proofs.SummaryBudget)); summary.Complete() {
+		t.Fatalf("exhausted summary completed for a larger caller: %+v", summary)
 	}
 }
 

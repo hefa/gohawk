@@ -286,6 +286,10 @@ func predicate(err error) bool {
 `+strings.Repeat("println(err)\n", 32)+`return err != nil
 }
 func summarized(err error) { if predicate(err) { println(err) } }
+func heavyPredicate(err error) bool {
+`+strings.Repeat("println(err)\n", proofs.SummaryBudget+1)+`return err != nil
+}
+func heavySummarized(err error) { if heavyPredicate(err) { println(err) } }
 func captured(err error) { check := predicate; func() { if check(err) { println(err) } }() }
 `)
 	for _, test := range []struct {
@@ -299,6 +303,7 @@ func captured(err error) { check := predicate; func() { if check(err) { println(
 		{"asserted", true, false},
 		{"derived", true, false},
 		{"summarized", true, false},
+		{"heavySummarized", false, false},
 		{"captured", true, false},
 		{"sentinel", true, false},
 		{"matching", true, false},
@@ -317,13 +322,22 @@ func captured(err error) { check := predicate; func() { if check(err) { println(
 				t.Fatal("fixture must retain 64 provenance calls and println in actual SSA")
 			}
 			t.Log(branch.String())
-			if test.name == "derived" || test.name == "summarized" || test.name == "captured" {
+			if test.name == "derived" || test.name == "captured" {
 				// These actual bodies require more than sixteen structural visits;
-				// standalone derivation or summary budgets would wrongly accept them.
+				// a standalone derivation budget would wrongly accept them.
 				got := proveResourceSuccessBranch(nil, branchTestKnowledge(), branch.Block(), branch.Block().Succs[0],
 					errorValue, token.NoPos, proofs.NewSearchBudget(16))
 				if got.State != proofs.EvidenceUnknown || got.Reason != resourceReasonBudgetExhausted {
 					t.Fatalf("nested work bypassed the branch allowance: %+v", got)
+				}
+			}
+			if test.name == "summarized" {
+				// The predicate summary spends a budget of its own: a branch
+				// that can pay for the lookup reads the complete answer.
+				got := proveResourceSuccessBranch(nil, branchTestKnowledge(), branch.Block(), branch.Block().Succs[0],
+					errorValue, token.NoPos, proofs.NewSearchBudget(16))
+				if !got.Proven() || got.success {
+					t.Fatalf("summary answer depended on the branch allowance: %+v", got)
 				}
 			}
 			for arm, successor := range branch.Block().Succs {
