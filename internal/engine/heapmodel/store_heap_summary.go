@@ -305,17 +305,11 @@ func freshOrigin(object *region) string {
 // made stays a write the caller must expect even after a later call made
 // the graph forget the slot's exact content.
 func (projection *heapProjection) edges(states []*regionState, returns []*ssa.Return) []HeapEdge {
-	type witness struct {
-		exit    map[HeapTarget]bool
-		ever    map[HeapTarget]bool
-		stale   bool
-		returns int
-	}
-	witnesses := map[HeapSlot]*witness{}
-	entryFor := func(from HeapSlot) *witness {
+	witnesses := map[HeapSlot]*edgeWitness{}
+	entryFor := func(from HeapSlot) *edgeWitness {
 		entry := witnesses[from]
 		if entry == nil {
-			entry = &witness{exit: map[HeapTarget]bool{}, ever: map[HeapTarget]bool{}}
+			entry = &edgeWitness{}
 			witnesses[from] = entry
 		}
 		return entry
@@ -332,11 +326,10 @@ func (projection *heapProjection) edges(states []*regionState, returns []*ssa.Re
 			stale := set.get(pointee)
 			target := projection.targetOf(pointee)
 			if from.Root.Kind == HeapResult && target.Kind == HeapTargetNil {
-				entry.ever[target] = true
+				entry.add(target, false)
 				continue
 			}
-			entry.exit[target] = true
-			entry.ever[target] = true
+			entry.add(target, true)
 			entry.stale = entry.stale || stale
 		}
 	}
@@ -355,21 +348,55 @@ func (projection *heapProjection) edges(states []*regionState, returns []*ssa.Re
 	projection.projectHistory(func(from HeapSlot, set pointees) {
 		entry := entryFor(from)
 		for _, pointee := range orderedPointees(set) {
-			entry.ever[projection.targetOf(pointee)] = true
+			entry.add(projection.targetOf(pointee), false)
 		}
 	})
 	var edges []HeapEdge
 	for from, entry := range witnesses {
-		must := entry.returns == relevant[from.Root] && len(entry.exit) == 1 && !entry.stale
-		for target := range entry.ever {
-			edge := HeapEdge{From: from, To: target, Must: must && entry.exit[target] && target.Kind != HeapTargetUnknown}
-			if edgeWorthListing(edge, entry.exit) {
+		must := entry.returns == relevant[from.Root] && entry.exits == 1 && !entry.stale
+		for _, witnessed := range entry.targets {
+			target := witnessed.target
+			edge := HeapEdge{From: from, To: target, Must: must && witnessed.exit && target.Kind != HeapTargetUnknown}
+			if edgeWorthListing(edge, entry.exitsBeyondFresh) {
 				edges = append(edges, edge)
 			}
 		}
 	}
 	slices.SortFunc(edges, publishedEdgeOrder)
 	return edges
+}
+
+// edgeWitness gathers what one slot held: every target it ever held, which
+// of them it held at a return, and on how many returns. A slot holds few
+// targets, so they are listed rather than hashed.
+type edgeWitness struct {
+	targets []witnessedTarget
+	// exits counts the targets held at a return; exitsBeyondFresh records
+	// that one of them was neither a fresh object nor nil.
+	exits            int
+	exitsBeyondFresh bool
+	stale            bool
+	returns          int
+}
+
+type witnessedTarget struct {
+	target HeapTarget
+	exit   bool
+}
+
+func (entry *edgeWitness) add(target HeapTarget, exit bool) {
+	index := slices.IndexFunc(entry.targets, func(witnessed witnessedTarget) bool { return witnessed.target == target })
+	if index < 0 {
+		index = len(entry.targets)
+		entry.targets = append(entry.targets, witnessedTarget{target: target})
+	}
+	if exit && !entry.targets[index].exit {
+		entry.targets[index].exit = true
+		entry.exits++
+		if target.Kind != HeapTargetFresh && target.Kind != HeapTargetNil {
+			entry.exitsBeyondFresh = true
+		}
+	}
 }
 
 // orderedSlots lists a slot map's keys in a fixed order, so the slots a
@@ -426,22 +453,14 @@ func isNilSet(set pointees) bool {
 // the summary is applied: bufio.NewReaderSize returns its argument or a new
 // Reader, and a caller that saw only the argument would hold it as the one
 // result.
-func edgeWorthListing(edge HeapEdge, exit map[HeapTarget]bool) bool {
+func edgeWorthListing(edge HeapEdge, exitsBeyondFresh bool) bool {
 	if edge.To.Kind == HeapTargetSlot && edge.To.Slot == edge.From {
 		return false
 	}
 	if !assumedByDefault(edge) {
 		return true
 	}
-	if edge.To.Kind != HeapTargetFresh {
-		return false
-	}
-	for target := range exit {
-		if target.Kind != HeapTargetFresh && target.Kind != HeapTargetNil {
-			return true
-		}
-	}
-	return false
+	return edge.To.Kind == HeapTargetFresh && exitsBeyondFresh
 }
 
 // assumedByDefault reports an edge a caller applying the summary assumes
