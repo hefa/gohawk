@@ -252,8 +252,13 @@ func (guards PathGuards) extendWithFormats(
 	if len(guards) >= GuardLimit {
 		return guards, GuardConsistent
 	}
-	next := append(slices.Clone(guards), guard)
-	slices.SortFunc(next, func(left, right PathGuard) int { return strings.Compare(left.Identity, right.Identity) })
+	// Guards stay sorted by identity and the new one is absent, so it goes
+	// in at its place in one exact allocation.
+	at, _ := slices.BinarySearchFunc(guards, identity, func(held PathGuard, identity string) int { return strings.Compare(held.Identity, identity) })
+	next := make(PathGuards, len(guards)+1)
+	copy(next, guards[:at])
+	next[at] = guard
+	copy(next[at+1:], guards[at:])
 	return next, GuardConsistent
 }
 
