@@ -1,6 +1,7 @@
 package lifecyclefacts
 
 import (
+	"encoding/binary"
 	"errors"
 	"go/types"
 	"slices"
@@ -176,12 +177,124 @@ type wireHeap struct {
 }
 
 type wireSlot struct {
+	Kind    heapmodel.HeapRootKind
+	Index   int
+	Package int
+	Name    int
+	Path    int
+}
+
+// A slot is usually a parameter or result with a short path, and slots were
+// a fifth of all fact bytes as five-element arrays. A slot whose fields fit
+// slotFields is published as one integer instead, its kind in the low bits,
+// so the commonest slots take one byte; any other slot stays an array.
+// slotBits gives the width of each field in fields order.
+var slotBits = [...]uint{2, 4, 14, 14, 14}
+
+// wireSlotArray is a slot's array form.
+type wireSlotArray struct {
 	_       struct{} `cbor:",toarray"`
 	Kind    heapmodel.HeapRootKind
 	Index   int
 	Package int
 	Name    int
 	Path    int
+}
+
+func (slot *wireSlot) fields() [5]int {
+	return [5]int{int(slot.Kind), slot.Index, slot.Path, slot.Name, slot.Package}
+}
+
+// packed returns the slot as one integer, if every field fits.
+func (slot *wireSlot) packed() (uint64, bool) {
+	var packed uint64
+	shift := uint(0)
+	for index, value := range slot.fields() {
+		bits := slotBits[index]
+		if value < 0 || value >= 1<<bits {
+			return 0, false
+		}
+		packed |= uint64(value) << shift
+		shift += bits
+	}
+	return packed, true
+}
+
+func (slot *wireSlot) MarshalCBOR() ([]byte, error) {
+	if packed, ok := slot.packed(); ok {
+		return cborUint(packed), nil
+	}
+	return factcodec.MarshalPart(wireSlotArray{Kind: slot.Kind, Index: slot.Index, Package: slot.Package, Name: slot.Name, Path: slot.Path})
+}
+
+func (slot *wireSlot) UnmarshalCBOR(data []byte) error {
+	if len(data) == 0 || data[0]>>5 != 0 {
+		var array wireSlotArray
+		if err := factcodec.UnmarshalPart(data, &array); err != nil {
+			return err
+		}
+		*slot = wireSlot{Kind: array.Kind, Index: array.Index, Package: array.Package, Name: array.Name, Path: array.Path}
+		return nil
+	}
+	packed, err := parseCBORUint(data)
+	if err != nil {
+		return err
+	}
+	var fields [5]int
+	for index := range fields {
+		bits := slotBits[index]
+		fields[index] = int(packed & (1<<bits - 1)) //nolint:gosec // masked to at most 14 bits.
+		packed >>= bits
+	}
+	if packed != 0 {
+		return errPackedSlot
+	}
+	kind := heapmodel.HeapRootKind(fields[0]) //nolint:gosec // two bits wide.
+	*slot = wireSlot{Kind: kind, Index: fields[1], Path: fields[2], Name: fields[3], Package: fields[4]}
+	return nil
+}
+
+var errPackedSlot = errors.New("packed heap slot out of range")
+
+// cborUint encodes a CBOR unsigned integer in its shortest form, as the
+// deterministic encoder does.
+func cborUint(value uint64) []byte {
+	switch {
+	case value < 24:
+		return []byte{byte(value)}
+	case value <= 0xff:
+		return []byte{24, byte(value)}
+	case value <= 0xffff:
+		return binary.BigEndian.AppendUint16([]byte{25}, uint16(value))
+	case value <= 0xffffffff:
+		return binary.BigEndian.AppendUint32([]byte{26}, uint32(value))
+	}
+	return binary.BigEndian.AppendUint64([]byte{27}, value)
+}
+
+// parseCBORUint decodes exactly one shortest-form CBOR unsigned integer, so
+// every slot has one encoding.
+func parseCBORUint(data []byte) (uint64, error) {
+	head := data[0] & 0x1f
+	var value, least uint64
+	switch {
+	case head < 24 && len(data) == 1:
+		return uint64(head), nil
+	case head == 24 && len(data) == 2:
+		value, least = uint64(data[1]), 24
+	case head == 25 && len(data) == 3:
+		value, least = uint64(binary.BigEndian.Uint16(data[1:])), 1<<8
+	case head == 26 && len(data) == 5:
+		value, least = uint64(binary.BigEndian.Uint32(data[1:])), 1<<16
+	case head == 27 && len(data) == 9:
+		value, least = binary.BigEndian.Uint64(data[1:]), 1<<32
+	default:
+		return 0, errPackedSlot
+	}
+	if value < least {
+		return 0, errPackedSlot
+	}
+	return value, nil
 }
 
 type wireEdge struct {

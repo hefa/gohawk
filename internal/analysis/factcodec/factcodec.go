@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	wireHeader      = "GHF\x04"
+	wireHeader      = "GHF\x05"
 	maxPayloadBytes = 16 << 20
 )
 

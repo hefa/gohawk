@@ -818,9 +818,13 @@ func TestPublishedFactRoundTripsExactly(t *testing.T) {
 				From: parameter,
 				To:   heapmodel.HeapTarget{Kind: heapmodel.HeapTargetFresh, Origin: "bufio.NewReaderSize", Object: 2},
 			}, {From: global, To: heapmodel.HeapTarget{Kind: heapmodel.HeapTargetSlot, Slot: parameter}, Must: true}},
-			Effects:   []heapmodel.HeapEffect{{Slot: global, Escape: 2, Every: true}, {Slot: parameter, Release: "Close"}},
-			Reads:     []heapmodel.HeapSlot{},
-			Requires:  []heapmodel.HeapRequirement{{Slot: parameter, Method: "Close"}},
+			Effects: []heapmodel.HeapEffect{{Slot: global, Escape: 2, Every: true}, {Slot: parameter, Release: "Close"}},
+			Reads:   []heapmodel.HeapSlot{},
+			Requires: []heapmodel.HeapRequirement{
+				{Slot: parameter, Method: "Close"},
+				// Too wide to publish as one integer: the slot keeps its array form.
+				{Slot: heapmodel.HeapSlot{Root: heapmodel.HeapRoot{Kind: heapmodel.HeapFreeVar, Index: 40}}, Method: "Close"},
+			},
 			Truncated: nil,
 		},
 	}
