@@ -107,6 +107,10 @@ func (graph *regionGraph) entryState(block *ssa.BasicBlock, out map[*ssa.BasicBl
 		graph.entry[block] = shared
 		return shared
 	}
+	if merged, ok := graph.runs.reuseEntry(block, out); ok {
+		graph.entry[block] = merged
+		return merged
+	}
 	var merged *regionState
 	for _, predecessor := range block.Preds {
 		state, ok := out[predecessor]
@@ -125,8 +129,54 @@ func (graph *regionGraph) entryState(block *ssa.BasicBlock, out map[*ssa.BasicBl
 	if merged == nil {
 		return nil
 	}
+	graph.runs.recordEntry(block, out, merged)
 	graph.entry[block] = merged
 	return merged
+}
+
+// A join's entry is the merge of its predecessors' out states, rebuilt every
+// round. When every predecessor's out state is the very state it was last
+// round, as it is after a skipped run, the merge would rebuild the same entry,
+// so the last one is reused. A loop header's entry is widened in place, so it
+// is always rebuilt.
+
+// joinEntry is a join's last entry and the predecessor out states it merged.
+type joinEntry struct {
+	preds  []*regionState
+	merged *regionState
+}
+
+// reuseEntry returns the join's last entry if its predecessors' out states
+// are unchanged.
+func (runs *blockRuns) reuseEntry(block *ssa.BasicBlock, out map[*ssa.BasicBlock]*regionState) (*regionState, bool) {
+	if runs == nil {
+		return nil, false
+	}
+	last, ok := runs.joins[block]
+	if !ok {
+		return nil, false
+	}
+	for index, predecessor := range block.Preds {
+		if out[predecessor] != last.preds[index] {
+			return nil, false
+		}
+	}
+	return last.merged, true
+}
+
+// recordEntry keeps a join's entry for reuse, unless it is a loop header.
+func (runs *blockRuns) recordEntry(block *ssa.BasicBlock, out map[*ssa.BasicBlock]*regionState, merged *regionState) {
+	if runs == nil {
+		return
+	}
+	preds := make([]*regionState, len(block.Preds))
+	for index, predecessor := range block.Preds {
+		if block.Dominates(predecessor) {
+			return
+		}
+		preds[index] = out[predecessor]
+	}
+	runs.joins[block] = joinEntry{preds: preds, merged: merged}
 }
 
 // soleForwardEntry returns the out state of a block's only reached
@@ -369,6 +419,7 @@ type blockRuns struct {
 	seq     int
 	changed map[ssa.Value]int
 	last    map[*ssa.BasicBlock]blockRun
+	joins   map[*ssa.BasicBlock]joinEntry
 	read    []ssa.Value
 	reading bool
 }
@@ -384,7 +435,7 @@ type blockRun struct {
 }
 
 func newBlockRuns() *blockRuns {
-	return &blockRuns{changed: map[ssa.Value]int{}, last: map[*ssa.BasicBlock]blockRun{}}
+	return &blockRuns{changed: map[ssa.Value]int{}, last: map[*ssa.BasicBlock]blockRun{}, joins: map[*ssa.BasicBlock]joinEntry{}}
 }
 
 // noteRead records that the current run looked a value up.
