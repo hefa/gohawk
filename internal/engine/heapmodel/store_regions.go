@@ -151,6 +151,31 @@ func (set pointees) union(other pointees) {
 	}
 }
 
+// absorbs reports whether adding every member of other, each with the
+// staleness stale gives it, would leave the set unchanged under add and
+// union, so a shared set need not be copied first. stale may be nil for the
+// member's own bit. Unknown absorbs a known member; an unknown member
+// changes any set but itself.
+func (set pointees) absorbs(other pointees, stale func(slot, bool) bool) bool {
+	unknown := set.unknown()
+	for target, targetStale := range other {
+		if stale != nil {
+			targetStale = stale(target, targetStale)
+		}
+		old, ok := set[target]
+		switch {
+		case target.region.kind == regionUnknown:
+			if !ok || len(set) != 1 || targetStale && !old {
+				return false
+			}
+		case unknown:
+		case !ok || targetStale && !old:
+			return false
+		}
+	}
+	return true
+}
+
 func (set pointees) clone() pointees {
 	result := make(pointees, len(set))
 	maps.Copy(result, set)

@@ -458,6 +458,10 @@ func (graph *regionGraph) storeSlot(state *regionState, target slot, value point
 		state.contents[target] = value.clone()
 		return
 	}
+	if current, ok := state.contents[target]; ok && current.absorbs(value, nil) {
+		graph.bound(state, target, at)
+		return
+	}
 	existing := state.writable(target)
 	if existing == nil {
 		existing = graph.content(state, target)

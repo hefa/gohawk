@@ -212,6 +212,10 @@ func (graph *regionGraph) mergeContents(state, other *regionState, backEdge bool
 		return stale || backEdge && createdInsideLoop(pointee.region, header)
 	}
 	for target, set := range other.contents {
+		if current, ok := state.contents[target]; ok && current.absorbs(set, stale) {
+			graph.bound(state, target, nil)
+			continue
+		}
 		mine := state.writable(target)
 		if mine == nil {
 			mine = graph.content(before, target)
@@ -225,9 +229,12 @@ func (graph *regionGraph) mergeContents(state, other *regionState, backEdge bool
 	}
 	for target := range state.contents {
 		if _, present := other.contents[target]; !present {
-			mine := state.writable(target)
-			for pointee, pointeeStale := range graph.content(other, target) {
-				mine.add(pointee, stale(pointee, pointeeStale))
+			implicit := graph.content(other, target)
+			if !state.contents[target].absorbs(implicit, stale) {
+				mine := state.writable(target)
+				for pointee, pointeeStale := range implicit {
+					mine.add(pointee, stale(pointee, pointeeStale))
+				}
 			}
 			graph.bound(state, target, nil)
 		}
