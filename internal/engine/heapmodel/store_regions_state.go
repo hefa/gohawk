@@ -48,6 +48,10 @@ type regionState struct {
 	// slot beneath an object is the address of that field or element; its
 	// escape hands on what lies beneath it, not the object above it.
 	escapes map[slot]HeapEscape
+	// escapesShared marks escapes as shared with a clone; addEscape copies
+	// it before the first change. Escapes are most of what a clone copied,
+	// and most blocks add none.
+	escapesShared bool
 	// ran marks function values that code the graph cannot see invoked.
 	// Running a callback is not keeping it, so it is no escape; but what
 	// the callback captured may have been written, so the projection cuts
@@ -102,6 +106,7 @@ func stepKey(path string) string {
 // one in place afterwards without copying it first.
 func (state *regionState) clone() *regionState {
 	clear(state.owned)
+	state.escapesShared = true
 	result := &regionState{
 		contents:   cloneRegionMap(state.contents),
 		owned:      map[slot]bool{},
@@ -112,12 +117,27 @@ func (state *regionState) clone() *regionState {
 		clobbered:  cloneRegionMap(state.clobbered),
 		escaped:    cloneRegionMap(state.escaped),
 		ran:        maps.Clone(state.ran),
-		escapes:    cloneRegionMap(state.escapes),
+		escapes:    state.escapes,
 		opaque:     state.opaque,
 		deferred:   cloneRegionMap(state.deferred),
 		calls:      slices.Clone(state.calls),
 	}
+	result.escapesShared = true
 	return result
+}
+
+// addEscape records that the slot escaped in the given ways, copying a
+// shared escapes map only when the record changes. An absent slot is
+// recorded even with no ways, as a map update would record it.
+func (state *regionState) addEscape(target slot, kinds HeapEscape) {
+	if old, ok := state.escapes[target]; ok && old|kinds == old {
+		return
+	}
+	if state.escapesShared || state.escapes == nil {
+		state.escapes = cloneRegionMap(state.escapes)
+		state.escapesShared = false
+	}
+	state.escapes[target] |= kinds
 }
 
 // writable returns the slot's contents set for an in-place change, copying
@@ -166,7 +186,7 @@ func (graph *regionGraph) merge(state, other *regionState, backEdge bool, header
 	maps.Copy(state.escaped, other.escaped)
 	maps.Copy(state.ran, other.ran)
 	for target, kinds := range other.escapes {
-		state.escapes[target] |= kinds
+		state.addEscape(target, kinds)
 	}
 	state.opaque = state.opaque || other.opaque
 	state.deferred.union(other.deferred)

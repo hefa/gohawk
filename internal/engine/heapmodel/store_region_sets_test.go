@@ -141,17 +141,25 @@ func TestRegionStateScalarCloneIsIndependentAndWritable(t *testing.T) {
 	copy.stepEpochs["field"] = 3
 	copy.clobbered[target] = 4
 	copy.escaped[owner] = false
-	copy.escapes[target] = 0
+	// Escapes are shared after a clone; changes go through addEscape.
+	copy.addEscape(target, HeapEscape(2))
 	if state.backing[target] != owner || state.stepEpochs["field"] != 1 || state.clobbered[target] != 2 ||
 		!state.escaped[owner] || state.escapes[target] != HeapEscape(1) {
 		t.Fatal("changing scalar snapshot evidence changed the original state")
+	}
+	if copy.escapes[target] != HeapEscape(3) {
+		t.Fatal("a clone lost its own escape")
+	}
+	state.addEscape(target, HeapEscape(4))
+	if copy.escapes[target] != HeapEscape(3) {
+		t.Fatal("an original's escape reached its clone")
 	}
 	copy = (&regionState{}).clone()
 	copy.backing[target] = owner
 	copy.stepEpochs["field"] = 1
 	copy.clobbered[target] = 2
 	copy.escaped[owner] = true
-	copy.escapes[target] = HeapEscape(1)
+	copy.addEscape(target, HeapEscape(1))
 }
 
 func BenchmarkRegionStateContentsClone(b *testing.B) {

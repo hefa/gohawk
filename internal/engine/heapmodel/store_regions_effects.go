@@ -211,7 +211,7 @@ func (graph *regionGraph) escape(state *regionState, set pointees, kind HeapEsca
 		if state.escapes[target]&kind != kind {
 			graph.recordEscape(target, kind, at)
 		}
-		state.escapes[target] |= kind
+		state.addEscape(target, kind)
 		if target.region.kind == regionSite {
 			state.escaped[target.region] = true
 		}
