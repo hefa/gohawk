@@ -2,9 +2,7 @@ package lifecyclefacts
 
 import (
 	"go/types"
-	"strings"
 
-	"github.com/fxamacker/cbor/v2"
 	"github.com/kojah/gohawk/internal/analysis/factcodec"
 	"github.com/kojah/gohawk/internal/analysis/factscope"
 	"golang.org/x/tools/go/analysis"
@@ -12,18 +10,10 @@ import (
 
 // Methods and functions are most of a package's lifecycle facts, so they are
 // published in groups (see factcodec.Group), all as package facts: a
-// package's functions in one, and its types' method groups in a table keyed
-// by type. x/tools never carries a package fact beyond the package's direct
-// importers, and only a direct importer can call a package-level function.
-//
-// A method can be reached through the API of a package that does not import
-// the method's own, so a package also carries, in its table, the method
-// groups its direct imports carried for types its own API reaches; an
-// importer finds a method's group in the table of whichever direct import
-// let it name the type. x/tools carried a type's facts to every importer
-// down the build, reachable or not; the table carries only those an
-// importer can reach, as factscope decides, and copies their encodings
-// without decoding them.
+// package's functions in one, and its types' method groups in a
+// factcodec.TypeTable. x/tools never carries a package fact beyond the
+// package's direct importers, and only a direct importer can call a
+// package-level function.
 
 // publishedFunctions and publishedTypes hide the groups' schema from gob, as
 // publishedFact does.
@@ -33,11 +23,6 @@ type publishedFunctions struct {
 
 type publishedTypes struct {
 	publication[factcodec.Group[factcodec.Group[Fact]]]
-}
-
-// typeKey names a declared type across packages.
-func typeKey(name *types.TypeName) string {
-	return name.Pkg().Path() + " " + name.Name()
 }
 
 // summaryGroups gathers a package's summaries: methods by receiver type,
@@ -83,57 +68,25 @@ func (groups *summaryGroups) publish(pass *analysis.Pass) error {
 		}
 		pass.ExportPackageFact(&publishedFunctions{factcodec.Wrap(functions)})
 	}
-	table := map[string]cbor.RawMessage{}
-	for receiver, facts := range groups.methods {
-		group, err := factcodec.NewGroup(facts)
-		if err != nil {
-			return err
-		}
-		encoded, err := factcodec.MarshalPart(&group)
-		if err != nil {
-			return err
-		}
-		table[typeKey(receiver)] = encoded
+	table, err := factcodec.NewTypeTable(pass.Pkg, groups.methods, importTable(pass))
+	if err != nil {
+		return err
 	}
-	carryImportedTypes(pass, table)
-	if len(table) != 0 {
-		pass.ExportPackageFact(&publishedTypes{factcodec.Wrap(factcodec.NewRawGroup[factcodec.Group[Fact]](table))})
+	if len(table.Names) != 0 {
+		pass.ExportPackageFact(&publishedTypes{factcodec.Wrap(table)})
 	}
 	return nil
 }
 
-// carryImportedTypes adds to table the method groups of imported types the
-// package's API reaches.
-func carryImportedTypes(pass *analysis.Pass, table map[string]cbor.RawMessage) {
-	if pass.ImportPackageFact == nil {
-		return
-	}
-	reached := map[string]bool{}
-	for name := range factscope.Types(pass.Pkg) {
-		if name.Pkg() != nil && name.Pkg() != pass.Pkg {
-			reached[typeKey(name)] = true
-		}
-	}
-	if len(reached) == 0 {
-		return
-	}
-	for _, imported := range pass.Pkg.Imports() {
+// importTable reads the type tables of pass's imports.
+func importTable(pass *analysis.Pass) factcodec.ImportTable[Fact] {
+	return func(pkg *types.Package) (factcodec.TypeTable[Fact], bool) {
 		var published publishedTypes
-		if !pass.ImportPackageFact(imported, &published) {
-			continue
+		if pass.ImportPackageFact == nil || !pass.ImportPackageFact(pkg, &published) {
+			return factcodec.TypeTable[Fact]{}, false
 		}
-		types, err := published.Value()
-		if err != nil {
-			continue
-		}
-		for _, key := range types.Names {
-			if _, have := table[key]; have || !reached[key] {
-				continue
-			}
-			if encoded, ok := types.Raw(key); ok {
-				table[key] = encoded
-			}
-		}
+		table, err := published.Value()
+		return table, err == nil
 	}
 }
 
@@ -156,25 +109,7 @@ func importedGroupFact(pass *analysis.Pass, object *types.Func) (Fact, bool) {
 		}
 		return group.Lookup(object.Name())
 	}
-	receiver := factscope.Receiver(object)
-	if receiver == nil || receiver.Pkg() == nil {
-		return Fact{}, false
-	}
-	key := typeKey(receiver)
-	for _, imported := range pass.Pkg.Imports() {
-		var published publishedTypes
-		if !pass.ImportPackageFact(imported, &published) {
-			continue
-		}
-		types, err := published.Value()
-		if err != nil {
-			continue
-		}
-		if group, ok := types.Lookup(key); ok {
-			return group.Lookup(object.Name())
-		}
-	}
-	return Fact{}, false
+	return factcodec.LookupMethod(pass.Pkg, object, importTable(pass))
 }
 
 // PackageMembers expands the functions' group into their facts, for a dump.
@@ -193,23 +128,5 @@ func (fact *publishedTypes) PackageMembers(pkg *types.Package) []analysis.Object
 	if err != nil {
 		return nil
 	}
-	packages := map[string]*types.Package{pkg.Path(): pkg}
-	for _, imported := range pkg.Imports() {
-		packages[imported.Path()] = imported
-	}
-	var members []analysis.ObjectFact
-	for _, key := range table.Names {
-		path, name, _ := strings.Cut(key, " ")
-		owner, ok := packages[path]
-		if !ok {
-			continue
-		}
-		typeName, ok := owner.Scope().Lookup(name).(*types.TypeName)
-		group, found := table.Lookup(key)
-		if !ok || !found {
-			continue
-		}
-		members = append(members, group.Members(typeName, nil, func(fact Fact) analysis.Fact { return publish(fact) })...)
-	}
-	return members
+	return factcodec.TableMembers(&table, pkg, func(fact Fact) analysis.Fact { return publish(fact) })
 }

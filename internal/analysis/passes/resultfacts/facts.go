@@ -40,7 +40,7 @@ type publication = factcodec.Envelope[Fact]
 // analysis. It does not require lifecycle or concurrency inference.
 var Analyzer = &analysis.Analyzer{
 	Name: "resultfacts", Doc: "exports bounded unconditional result guarantees",
-	Requires: []*analysis.Analyzer{buildssa.Analyzer}, FactTypes: []analysis.Fact{new(publishedFact), new(publishedMethods), new(publishedFunctions)},
+	Requires: []*analysis.Analyzer{buildssa.Analyzer}, FactTypes: []analysis.Fact{new(publishedFact), new(publishedTypes), new(publishedFunctions)},
 	ResultType: reflect.TypeFor[*Engine](), Run: run,
 }
 
@@ -82,7 +82,7 @@ func run(pass *analysis.Pass) (any, error) {
 			pass.ExportObjectFact(object, &publishedFact{factcodec.Wrap(fact)})
 		}
 	}
-	if err := groups.publish(pass); err != nil {
+	if err := groups.publish(pass, engine.groups); err != nil {
 		return nil, err
 	}
 	return engine, nil

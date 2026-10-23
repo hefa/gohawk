@@ -9,6 +9,7 @@ import (
 	"go/types"
 	"io"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -213,29 +214,32 @@ func writeObjectFacts(buffer *bytes.Buffer, action *checker.Action, filter strin
 	}
 }
 
-// A pass may publish the facts of a type's methods, or of a package's
-// functions, as one group; the dump prints each member as the fact of its
-// own that it replaces.
-type methodGroup interface {
-	Members(owner types.Object) []analysis.ObjectFact
-}
-
-type functionGroup interface {
+// A pass may publish the facts of a package's functions, or of its types'
+// methods, as one package fact; the dump prints each member as the fact of
+// its own that it replaces. A method's group is carried by every package
+// whose API reaches its type, and is printed once.
+type factGroup interface {
 	PackageMembers(pkg *types.Package) []analysis.ObjectFact
 }
 
 func expandGroups(action *checker.Action) []analysis.ObjectFact {
-	var facts []analysis.ObjectFact
-	for _, fact := range action.AllObjectFacts() {
-		if group, ok := fact.Fact.(methodGroup); ok {
-			facts = append(facts, group.Members(fact.Object)...)
+	facts := action.AllObjectFacts()
+	type member struct {
+		object types.Object
+		kind   reflect.Type
+	}
+	seen := map[member]bool{}
+	for _, fact := range action.AllPackageFacts() {
+		group, ok := fact.Fact.(factGroup)
+		if !ok {
 			continue
 		}
-		facts = append(facts, fact)
-	}
-	for _, fact := range action.AllPackageFacts() {
-		if group, ok := fact.Fact.(functionGroup); ok {
-			facts = append(facts, group.PackageMembers(fact.Package)...)
+		for _, expanded := range group.PackageMembers(fact.Package) {
+			key := member{expanded.Object, reflect.TypeOf(expanded.Fact)}
+			if !seen[key] {
+				seen[key] = true
+				facts = append(facts, expanded)
+			}
 		}
 	}
 	return facts

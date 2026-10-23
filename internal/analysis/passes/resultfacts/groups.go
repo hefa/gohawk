@@ -9,12 +9,12 @@ import (
 )
 
 // Result facts are published in groups, as lifecycle facts are (see
-// factcodec.Group): a type's methods as one fact on the type, a package's
-// functions as one package fact. Each reaches exactly the importers the
-// functions' own facts did.
+// factcodec.Group), all as package facts: a package's functions in one, and
+// its types' method groups in a factcodec.TypeTable, which carries a method's
+// group to every importer that can reach the type.
 
-type publishedMethods struct {
-	groupPublication
+type publishedTypes struct {
+	factcodec.Envelope[factcodec.TypeTable[Fact]]
 }
 
 type publishedFunctions struct {
@@ -52,13 +52,13 @@ func (groups *factGroups) add(object *types.Func, fact Fact) bool {
 	return true
 }
 
-func (groups *factGroups) publish(pass *analysis.Pass) error {
-	for receiver, facts := range groups.methods {
-		group, err := factcodec.NewGroup(facts)
-		if err != nil {
-			return err
-		}
-		pass.ExportObjectFact(receiver, &publishedMethods{factcodec.Wrap(group)})
+func (groups *factGroups) publish(pass *analysis.Pass, imported importedGroups) error {
+	table, err := factcodec.NewTypeTable(pass.Pkg, groups.methods, imported.table)
+	if err != nil {
+		return err
+	}
+	if len(table.Names) != 0 {
+		pass.ExportPackageFact(&publishedTypes{factcodec.Wrap(table)})
 	}
 	if len(groups.functions) != 0 {
 		group, err := factcodec.NewGroup(groups.functions)
@@ -70,51 +70,61 @@ func (groups *factGroups) publish(pass *analysis.Pass) error {
 	return nil
 }
 
-// importedGroups are the groups a pass imported, found by type and package.
+// importedGroups are the groups a pass's direct imports published.
 type importedGroups struct {
-	methods   map[*types.TypeName]*publishedMethods
+	pkg       *types.Package
+	types     map[*types.Package]*publishedTypes
 	functions map[*types.Package]*publishedFunctions
 }
 
 func importGroups(pass *analysis.Pass) importedGroups {
-	groups := importedGroups{methods: map[*types.TypeName]*publishedMethods{}, functions: map[*types.Package]*publishedFunctions{}}
-	for _, imported := range pass.AllObjectFacts() {
-		object, ok := imported.Object.(*types.TypeName)
-		if published, valid := imported.Fact.(*publishedMethods); ok && valid {
-			groups.methods[object] = published
-		}
-	}
+	groups := importedGroups{pkg: pass.Pkg, types: map[*types.Package]*publishedTypes{}, functions: map[*types.Package]*publishedFunctions{}}
 	for _, imported := range pass.AllPackageFacts() {
-		if published, ok := imported.Fact.(*publishedFunctions); ok {
+		switch published := imported.Fact.(type) {
+		case *publishedTypes:
+			groups.types[imported.Package] = published
+		case *publishedFunctions:
 			groups.functions[imported.Package] = published
 		}
 	}
 	return groups
 }
 
+func (groups importedGroups) table(pkg *types.Package) (factcodec.TypeTable[Fact], bool) {
+	published, ok := groups.types[pkg]
+	if !ok {
+		return factcodec.TypeTable[Fact]{}, false
+	}
+	table, err := published.Value()
+	return table, err == nil
+}
+
 // lookup returns object's fact from its group.
 func (groups importedGroups) lookup(object *types.Func) (Fact, bool) {
-	var envelope *groupPublication
-	if receiver := factscope.Receiver(object); receiver != nil {
-		if published, ok := groups.methods[receiver]; ok {
-			envelope = &published.groupPublication
+	if factscope.Receiver(object) != nil {
+		if groups.pkg == nil {
+			return Fact{}, false
 		}
-	} else if published, ok := groups.functions[object.Pkg()]; ok {
-		envelope = &published.groupPublication
+		return factcodec.LookupMethod(groups.pkg, object, groups.table)
 	}
-	if envelope == nil {
+	published, ok := groups.functions[object.Pkg()]
+	if !ok {
 		return Fact{}, false
 	}
-	group, err := envelope.Value()
+	group, err := published.Value()
 	if err != nil {
 		return Fact{}, false
 	}
 	return group.Lookup(object.Name())
 }
 
-// Members expands the group into its methods' facts, for a dump.
-func (fact *publishedMethods) Members(owner types.Object) []analysis.ObjectFact {
-	return groupMembers(&fact.groupPublication, owner, nil)
+// PackageMembers expands the table into its methods' facts, for a dump.
+func (fact *publishedTypes) PackageMembers(pkg *types.Package) []analysis.ObjectFact {
+	table, err := fact.Value()
+	if err != nil {
+		return nil
+	}
+	return factcodec.TableMembers(&table, pkg, func(fact Fact) analysis.Fact { return wrapFact(fact) })
 }
 
 // PackageMembers expands the group into its functions' facts, for a dump.

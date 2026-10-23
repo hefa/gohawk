@@ -62,20 +62,20 @@ func HeavyPredicate(err error, sink *int) bool { ` + strings.Repeat("if err != n
 			}
 		}
 		pass.ExportObjectFact = func(object types.Object, published analysis.Fact) {
-			switch published := published.(type) {
-			case *publishedFact:
+			if published, ok := published.(*publishedFact); ok {
 				value, err := published.Value()
 				if err != nil {
 					t.Fatal(err)
 				}
 				record(object.Name(), value)
-			case *publishedMethods:
-				recordGroup(published.groupPublication)
 			}
 		}
 		pass.ExportPackageFact = func(published analysis.Fact) {
-			if group, ok := published.(*publishedFunctions); ok {
-				recordGroup(group.groupPublication)
+			switch published := published.(type) {
+			case *publishedFunctions:
+				recordGroup(published.groupPublication)
+			case *publishedTypes:
+				recordTable(t, published, record)
 			}
 		}
 		result, runErr := run(pass)
@@ -124,6 +124,28 @@ func checkStableResultCutoffs(t *testing.T, engine *Engine, functions []*ssa.Fun
 		if got.Available || got.NeverReturns() || got.Result(0) != Unknown || returned ||
 			got.Implies(ssacall.ParameterNil(0), 0, ssacall.OutcomeFalse) {
 			t.Errorf("%s: a larger caller budget turned an exhausted summary into a claim: %+v", function.Name(), got)
+		}
+	}
+}
+
+// recordTable records every method fact of a published type table.
+func recordTable(t *testing.T, published *publishedTypes, record func(string, Fact)) {
+	t.Helper()
+	table, err := published.Value()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range table.Names {
+		group, ok := table.Lookup(key)
+		if !ok {
+			t.Fatalf("%s: type group does not decode", key)
+		}
+		for _, name := range group.Names {
+			fact, ok := group.Lookup(name)
+			if !ok {
+				t.Fatalf("%s: grouped fact does not decode", name)
+			}
+			record(name, fact)
 		}
 	}
 }
