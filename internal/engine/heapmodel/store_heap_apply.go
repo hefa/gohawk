@@ -285,7 +285,7 @@ func (substitution *heapSubstitution) forgetSlots(set pointees) {
 		// what was known there and restamp its unwritten content.
 		for known := range substitution.state.contents {
 			if known.region == target.region && slotBeneath(known.path, target.path) {
-				delete(substitution.state.contents, known)
+				delete(substitution.state.mutableContents(), known)
 			}
 		}
 		substitution.state.mutableStepEpochs()[stepKey(target.path)] = substitution.graph.id(substitution.instruction)

@@ -290,7 +290,7 @@ func (graph *regionGraph) copySubtree(state *regionState, source, destination sl
 		}
 		rest := target.path[len(source.path):]
 		copied := destination.region.at(joinSlotPath(destination.path, trimSlash(rest)))
-		state.contents[copied] = set.clone()
+		state.mutableContents()[copied] = set.clone()
 		graph.remember(copied, set)
 	}
 	copySlotMetadata(state.mutableBacking(), source, destination)
@@ -353,7 +353,7 @@ func (graph *regionGraph) forgetWholeAbove(state *regionState, target slot) {
 		return
 	}
 	for path := parentPath(target.path); ; path = parentPath(path) {
-		delete(state.contents, target.region.at(path))
+		delete(state.mutableContents(), target.region.at(path))
 		if path == "" {
 			return
 		}
@@ -378,7 +378,7 @@ func (graph *regionGraph) storeAggregate(state *regionState, target slot, value 
 			// not inherit the uncertainty of a possible aggregate overwrite.
 			return
 		}
-		state.contents[target] = value.clone()
+		state.mutableContents()[target] = value.clone()
 		graph.remember(target, value)
 		graph.copySubtree(state, source, target)
 		if _, direct := state.backing[target]; !direct {
@@ -434,7 +434,7 @@ func (graph *regionGraph) weakElementStore(state *regionState, target slot, valu
 		// Preserve existing elements and the unwritten nil/foreign possibility
 		// before adding the new value; a wildcard store is never an exact fill.
 		star = graph.content(state, target)
-		state.contents[target] = star
+		state.mutableContents()[target] = star
 		state.own(target)
 	}
 	star.union(value)
@@ -537,7 +537,7 @@ func (graph *regionGraph) storeSlot(state *regionState, target slot, value point
 	graph.forgetWholeAbove(state, target)
 	if strong {
 		graph.clearSubtree(state, target)
-		state.contents[target] = value.clone()
+		state.mutableContents()[target] = value.clone()
 		return
 	}
 	if current, ok := state.contents[target]; ok && current.absorbs(value, nil) {
@@ -547,7 +547,7 @@ func (graph *regionGraph) storeSlot(state *regionState, target slot, value point
 	existing := state.writable(target)
 	if existing.isNil() {
 		existing = graph.content(state, target)
-		state.contents[target] = existing
+		state.mutableContents()[target] = existing
 		state.own(target)
 	}
 	existing.union(value)

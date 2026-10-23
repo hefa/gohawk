@@ -291,7 +291,7 @@ func (graph *regionGraph) widen(state, previous *regionState, header *ssa.BasicB
 			continue
 		}
 		graph.widened = append(graph.widened, widening{target: target, size: set.Len()})
-		state.contents[target] = pointeesOf(graph.unkR.at(""), false)
+		state.mutableContents()[target] = pointeesOf(graph.unkR.at(""), false)
 		state.own(target)
 	}
 	if state.epoch != previous.epoch {

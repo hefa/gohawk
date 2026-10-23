@@ -361,7 +361,7 @@ func (graph *regionGraph) makeClosure(state *regionState, closure *ssa.MakeClosu
 	graph.setValue(closure, pointeesOf(object.at(""), false))
 	for index, binding := range closure.Bindings {
 		target := object.at("binding:" + strconv.Itoa(index))
-		state.contents[target] = graph.pointees(binding).clone()
+		state.mutableContents()[target] = graph.pointees(binding).clone()
 		graph.remember(target, state.contents[target])
 	}
 }
@@ -406,7 +406,7 @@ func (graph *regionGraph) selectedSnapshot(state *regionState, address slot, sta
 			}
 		}
 		target := snapshot.at(path)
-		state.contents[target] = contents
+		state.mutableContents()[target] = contents
 		graph.bound(state, target, load)
 		graph.remember(target, state.contents[target])
 	}, func(string) {})

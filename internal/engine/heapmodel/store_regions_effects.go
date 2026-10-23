@@ -95,7 +95,7 @@ func (graph *regionGraph) invalidateForeign(state *regionState, step string, sta
 			continue
 		}
 		if step == "" || stepKey(target.path) == step || isIndexStep(step) && isIndexStep(lastStep(target.path)) {
-			delete(state.contents, target)
+			delete(state.mutableContents(), target)
 			if target.region.kind == regionSite {
 				state.mutableClobbered()[target] = stamp
 			}

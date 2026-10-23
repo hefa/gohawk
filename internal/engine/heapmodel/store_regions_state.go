@@ -106,13 +106,13 @@ func stepKey(path string) string {
 	return "self"
 }
 
-// clone shares the contents sets with the original, so neither may change
-// one in place afterwards without copying it first.
+// clone shares the contents map and its sets with the original, so neither
+// may change either in place afterwards without copying it first.
 func (state *regionState) clone() *regionState {
 	clear(state.owned)
 	state.escapesShared = true
 	result := &regionState{
-		contents:   cloneRegionMap(state.contents),
+		contents:   state.contents,
 		owned:      map[slot]bool{},
 		backing:    state.backing,
 		epoch:      state.epoch,
@@ -142,7 +142,8 @@ const (
 	sharedEscaped
 	sharedRan
 	sharedDeferred
-	sharedAll = sharedBacking | sharedStepEpochs | sharedClobbered | sharedEscaped | sharedRan | sharedDeferred
+	sharedContents
+	sharedAll = sharedBacking | sharedStepEpochs | sharedClobbered | sharedEscaped | sharedRan | sharedDeferred | sharedContents
 )
 
 // ownMap returns current, copied first if the state shares it or has none.
@@ -152,6 +153,13 @@ func ownMap[K comparable, V any](state *regionState, which sharedMaps, current m
 	}
 	state.shared &^= which
 	return cloneRegionMap(current)
+}
+
+// mutableContents returns the contents map for a change of which slots it
+// holds; a change inside one slot's set goes through writable.
+func (state *regionState) mutableContents() map[slot]pointees {
+	state.contents = ownMap(state, sharedContents, state.contents)
+	return state.contents
 }
 
 func (state *regionState) mutableBacking() map[slot]*region {
@@ -209,7 +217,7 @@ func (state *regionState) writable(target slot) pointees {
 		return set
 	}
 	set = set.clone()
-	state.contents[target] = set
+	state.mutableContents()[target] = set
 	state.own(target)
 	return set
 }
@@ -280,7 +288,7 @@ func (graph *regionGraph) mergeContents(state, other *regionState, backEdge bool
 		mine := state.writable(target)
 		if mine.isNil() {
 			mine = graph.content(before, target)
-			state.contents[target] = mine
+			state.mutableContents()[target] = mine
 			state.own(target)
 		}
 		for pointee, pointeeStale := range set.all() {
@@ -471,7 +479,7 @@ func renderPointees(set pointees) string {
 func (state *regionState) forgetStoredSubtree(target slot) {
 	for other := range state.contents {
 		if other.region == target.region && slotBeneath(other.path, target.path) {
-			delete(state.contents, other)
+			delete(state.mutableContents(), other)
 		}
 	}
 	for other := range state.backing {

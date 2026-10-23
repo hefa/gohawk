@@ -369,7 +369,7 @@ func (graph *regionGraph) bound(state *regionState, target slot, at ssa.Instruct
 		return
 	}
 	graph.widened = append(graph.widened, widening{target: target, at: at, size: set.Len()})
-	state.contents[target] = pointeesOf(graph.unkR.at(""), false)
+	state.mutableContents()[target] = pointeesOf(graph.unkR.at(""), false)
 }
 
 // boundValue collapses a value's pointees to unknown when they outgrew the
