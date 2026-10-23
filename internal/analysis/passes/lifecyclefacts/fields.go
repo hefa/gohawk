@@ -256,11 +256,25 @@ func releasedFields(pass *analysis.Pass, function *ssa.Function) FieldMask {
 		if !ok {
 			continue
 		}
+		// A field the method never loads cannot be released by it.
+		loads := fieldLoads(receiver, index)
+		if len(loads) == 0 {
+			continue
+		}
+		// The coverage walk asks about an instruction once per path state
+		// that reaches it; each answer depends only on the instruction, and
+		// each completion proof has its own budget, so one answer serves.
+		answers := map[ssa.Instruction]bool{}
 		// A panic-only placeholder cannot define the owner's cleanup contract:
 		// lack of a normal return does not witness release of any field.
 		// https://github.com/talostrading/sonic/blob/fa70f8c39b9eea68e782c4c7f3604fe232d4301c/multicast/peer.go#L262-L264
 		if lifecycle.MethodCallCoverage(function, func(instruction ssa.Instruction) bool {
-			return releasesField(pass, instruction, receiver, index, cleanup)
+			answer, ok := answers[instruction]
+			if !ok {
+				answer = releasesField(pass, instruction, loads, cleanup)
+				answers[instruction] = answer
+			}
+			return answer
 		}, lifecycle.CoverageEveryReturn, nil) {
 			released |= fieldMaskFor(index)
 		}
@@ -269,14 +283,15 @@ func releasedFields(pass *analysis.Pass, function *ssa.Function) FieldMask {
 }
 
 // releasesField reports whether the instruction discharges the receiver's
-// field: a cleanup call whose receiver derives from a load of that field, or
-// a completion proven for such a load handed to a helper, defer, or launch.
-func releasesField(pass *analysis.Pass, instruction ssa.Instruction, receiver ssa.Value, index int, cleanup []string) bool {
+// field, given every load of it: a cleanup call whose receiver derives from
+// a load, or a completion proven for a load handed to a helper, defer, or
+// launch.
+func releasesField(pass *analysis.Pass, instruction ssa.Instruction, loads []ssa.Value, cleanup []string) bool {
 	common := ssaflow.InstructionCall(instruction)
 	if common == nil {
 		return false
 	}
-	for _, load := range fieldLoads(receiver, index) {
+	for _, load := range loads {
 		for _, method := range cleanup {
 			if ssaflow.CallName(common) == method && heapmodel.ValueDerivesFrom(ssaflow.CallReceiver(common), load) {
 				return true
