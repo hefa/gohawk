@@ -26,7 +26,7 @@ func WalkStates[S any, K comparable](initial []S, key func(S) K, step func(S) ([
 func WalkStatesWithin[S any, K comparable](initial []S, key func(S) K, step func(S) ([]S, bool), budget *proofs.SearchBudget) {
 	queue := slices.Clone(initial)
 	head := 0
-	expanded := map[K]bool{}
+	var expanded expandedStates[K]
 	for head < len(queue) {
 		if !budget.Spend() {
 			return
@@ -41,10 +41,9 @@ func WalkStatesWithin[S any, K comparable](initial []S, key func(S) K, step func
 		if budget.Exhausted() {
 			return
 		}
-		if expanded[identity] {
+		if !expanded.add(identity) {
 			continue
 		}
-		expanded[identity] = true
 		successors, ok := step(state)
 		if !ok || budget.Exhausted() {
 			return
@@ -113,4 +112,38 @@ func InstructionsReachableAfterWithin(start ssa.Instruction, budget *proofs.Sear
 		return successors, true
 	})
 	return result
+}
+
+// expandedStates is a walk's set of expanded state keys: the first few in an
+// array that lives on the walk's stack, then a map. A map per walk was most
+// of what small walks allocated.
+type expandedStates[K comparable] struct {
+	inline [8]K
+	count  int
+	spill  map[K]bool
+}
+
+// add records key and reports whether it was not already present.
+func (set *expandedStates[K]) add(key K) bool {
+	if set.spill != nil {
+		if set.spill[key] {
+			return false
+		}
+		set.spill[key] = true
+		return true
+	}
+	if slices.Contains(set.inline[:set.count], key) {
+		return false
+	}
+	if set.count < len(set.inline) {
+		set.inline[set.count] = key
+		set.count++
+		return true
+	}
+	set.spill = make(map[K]bool, 2*len(set.inline))
+	for _, seen := range set.inline[:set.count] {
+		set.spill[seen] = true
+	}
+	set.spill[key] = true
+	return true
 }
