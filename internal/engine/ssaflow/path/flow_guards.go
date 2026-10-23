@@ -275,12 +275,18 @@ func (guards PathGuards) withoutIdentityWithin(identity string, budget *proofs.S
 	if len(guards) > GuardLimit {
 		return guards.withoutIdentityInto(nil, identity, budget)
 	}
-	// Collect the bounded list on the stack,
-	// then detach exactly the retained entries so sibling paths stay independent.
+	// Collect the bounded list on the stack, then detach the retained
+	// entries. Guard lists are never written in place, and every extension
+	// clones first, so an unchanged list is returned itself, clipped so an
+	// append to it reallocates; copying it was most of what a store's guard
+	// invalidation allocated.
 	var buffer [GuardLimit]PathGuard
 	kept := guards.withoutIdentityInto(buffer[:0], identity, budget)
 	if len(kept) == 0 {
 		return nil
+	}
+	if len(kept) == len(guards) {
+		return slices.Clip(guards)
 	}
 	result := make(PathGuards, len(kept))
 	copy(result, kept)

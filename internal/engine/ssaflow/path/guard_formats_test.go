@@ -226,9 +226,12 @@ func TestGuardFilteringPreservesEvidenceAndOwnership(t *testing.T) {
 		t.Fatal("changing filtered output changed input evidence")
 	}
 	got = guards.withoutIdentityWithin("unrelated", nil)
-	got[0].Stable = false
-	if !slices.Equal(guards, before) {
-		t.Fatal("an unchanged filter shared writable input storage")
+	if !slices.Equal(got, before) {
+		t.Fatalf("an unchanged filter changed the guards: %v", got)
+	}
+	_ = append(got, PathGuard{Identity: "appended"})
+	if wide := guards[:cap(guards)]; len(wide) > len(before) && wide[len(before)].Identity == "appended" {
+		t.Fatal("appending to an unchanged filter wrote into the input's storage")
 	}
 	if got := guards.withoutIdentityWithin("", nil); got != nil {
 		t.Fatal("removing every guard must return nil")
