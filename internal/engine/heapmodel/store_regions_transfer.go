@@ -64,15 +64,15 @@ func (graph *regionGraph) define(state *regionState, instruction ssa.Instruction
 	case operations.FieldAddress:
 		graph.setValue(plan.Value, graph.selectStep(graph.pointees(plan.Source), "field:"+strconv.Itoa(plan.Field)))
 	case operations.FieldLoad:
-		graph.setValue(plan.Value, graph.load(state, graph.selectStep(graph.pointees(plan.Source), "field:"+strconv.Itoa(plan.Field)), plan.Value))
+		graph.setValue(plan.Value, graph.loadView(state, graph.selectStep(graph.pointees(plan.Source), "field:"+strconv.Itoa(plan.Field)), plan.Value))
 	case operations.IndexAddress:
 		graph.setValue(plan.Value, graph.index(plan.Source, plan.Index))
 	case operations.IndexLoad:
-		graph.setValue(plan.Value, graph.load(state, graph.index(plan.Source, plan.Index), plan.Value))
+		graph.setValue(plan.Value, graph.loadView(state, graph.index(plan.Source, plan.Index), plan.Value))
 	case operations.Sliced:
 		graph.slice(plan.Slice)
 	case operations.Load:
-		graph.setValue(plan.Value, graph.load(state, graph.pointees(plan.Source), plan.Value))
+		graph.setValue(plan.Value, graph.loadView(state, graph.pointees(plan.Source), plan.Value))
 	case operations.Opaque:
 		graph.setValue(plan.Value, pointees{{region: graph.opaque(plan.Value)}: false})
 	case operations.Ignored:
@@ -245,6 +245,35 @@ func (graph *regionGraph) slice(sliced *ssa.Slice) {
 
 // load returns what the slots hold. A whole-aggregate load makes a snapshot
 // whose sub-slots are copied from the source.
+// loadView is load for a caller that only reads the result, as setValue and
+// the builtin element copies do. A scalar load through one address that is
+// not stale answers exactly that slot's content, so it returns the content
+// view instead of building a copy of it.
+func (graph *regionGraph) loadView(state *regionState, addresses pointees, loaded ssa.Value) pointees {
+	if len(addresses) != 1 || isAggregate(loaded.Type()) {
+		return graph.load(state, addresses, loaded)
+	}
+	for address, stale := range addresses {
+		if stale {
+			break
+		}
+		view := graph.contentView(state, address)
+		nameLoadedPlaceholders(view, loaded)
+		return view
+	}
+	return graph.load(state, addresses, loaded)
+}
+
+// nameLoadedPlaceholders names each placeholder in set by the load that
+// first produced it.
+func nameLoadedPlaceholders(set pointees, loaded ssa.Value) {
+	for pointee := range set {
+		if pointee.region.kind == regionPlaceholder && pointee.region.origin == nil {
+			pointee.region.origin = loaded
+		}
+	}
+}
+
 func (graph *regionGraph) load(state *regionState, addresses pointees, loaded ssa.Value) pointees {
 	if isAggregate(loaded.Type()) {
 		// A slot written whole from an aggregate value holds that value: a

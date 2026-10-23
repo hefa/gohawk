@@ -513,7 +513,7 @@ func (graph *regionGraph) builtin(state *regionState, builtin *ssa.Builtin, comm
 				// the function may hand on, so the array behind it has
 				// escaped as far as its contents are concerned.
 				graph.escape(state, elements, HeapEscapedField, instruction)
-				elements = graph.load(state, graph.selectStep(elements, pathStar), argument)
+				elements = graph.loadView(state, graph.selectStep(elements, pathStar), argument)
 			}
 			for target := range result {
 				graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, pathStar)}, elements)
@@ -524,7 +524,7 @@ func (graph *regionGraph) builtin(state *regionState, builtin *ssa.Builtin, comm
 		if len(common.Args) < 2 {
 			return
 		}
-		elements := graph.load(state, graph.selectStep(graph.pointees(common.Args[1]), pathStar), common.Args[1])
+		elements := graph.loadView(state, graph.selectStep(graph.pointees(common.Args[1]), pathStar), common.Args[1])
 		for target := range graph.pointees(common.Args[0]) {
 			graph.weakElementStore(state, slot{region: target.region, path: joinSlotPath(target.path, pathStar)}, elements)
 		}

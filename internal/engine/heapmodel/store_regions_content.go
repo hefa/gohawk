@@ -139,7 +139,20 @@ func (graph *regionGraph) contentView(state *regionState, target slot) pointees 
 	if member, ok := graph.contentSole(state, target); ok {
 		return graph.singleton(member, false)
 	}
+	// A stored set that no wildcard element adds to is the answer itself;
+	// content would copy it.
+	if set := state.contents[target]; len(set) > 0 && !graph.wildcardContributes(state, target) {
+		return set
+	}
 	return graph.content(state, target)
+}
+
+// wildcardContributes reports whether a read of the slot also takes a
+// wildcard element's content: a wildcard read, or an index read beneath an
+// array whose wildcard element holds something.
+func (graph *regionGraph) wildcardContributes(state *regionState, target slot) bool {
+	step := lastStep(target.path)
+	return step == pathStar || isIndexStep(step) && len(state.contents[graph.starSlot(target)]) > 0
 }
 
 // contentSole reports the one object content would return for a slot it
@@ -152,11 +165,7 @@ func (graph *regionGraph) contentSole(state *regionState, target slot) (slot, bo
 		return slot{region: graph.nilR}, true
 	case regionSite, regionExternal, regionOpaque, regionPlaceholder, regionSnapshot, regionClosure:
 	}
-	if len(state.contents[target]) > 0 {
-		return slot{}, false
-	}
-	step := lastStep(target.path)
-	if step == pathStar || isIndexStep(step) && len(state.contents[graph.starSlot(target)]) > 0 {
+	if len(state.contents[target]) > 0 || graph.wildcardContributes(state, target) {
 		return slot{}, false
 	}
 	return graph.unwrittenSole(state, target)
