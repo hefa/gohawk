@@ -1,4 +1,5 @@
-// Package vetprofile records where one go vet analysis unit spends its time.
+// Package vetprofile records where one go vet analysis unit spends its time
+// and what it allocates.
 //
 // gohawk analyzes each package in its own vet-tool process, so a whole-run
 // profile is the union of per-unit records. When the profile directory is set,
@@ -118,6 +119,22 @@ func Instrument(directory string, unit vetunit.Config, analyzers []*analysis.Ana
 		current.wrap(analyzer, wrapped)
 	}
 	return nil
+}
+
+// writeAllocations records every sampled allocation since the process
+// started as name.allocs, for go tool pprof -sample_index=alloc_space. Garbage
+// collection is a large share of a unit's CPU, and this names the code that
+// makes the garbage. It is taken before fingerprinting allocates.
+func (s *session) writeAllocations() error {
+	file, err := os.Create(filepath.Join(s.dir, s.name+".allocs"))
+	if err != nil {
+		return fmt.Errorf("create allocation profile: %w", err)
+	}
+	writeErr := pprof.Lookup("allocs").WriteTo(file, 0)
+	if writeErr != nil {
+		writeErr = fmt.Errorf("write allocation profile: %w", writeErr)
+	}
+	return errors.Join(writeErr, file.Close())
 }
 
 // importedFacts sizes, counts and fingerprints the unit's imported fact
@@ -320,7 +337,7 @@ func usesFacts(analyzer *analysis.Analyzer, seen map[*analysis.Analyzer]bool) bo
 func (s *session) write() error {
 	finished := time.Now()
 	pprof.StopCPUProfile()
-	closeErr := s.profile.Close()
+	closeErr := errors.Join(s.profile.Close(), s.writeAllocations())
 	factBytes, factCount, factDigests, factTypes, factErr := importedFacts(s.unit)
 	if factErr != nil {
 		return errors.Join(closeErr, factErr)

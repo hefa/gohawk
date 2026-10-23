@@ -69,6 +69,10 @@ script writes, under `profiles/`:
 - `NAME-cpu-analyzers.txt`, CPU time by the `analyzer` sample label.
   Unlabelled samples are setup.
 
+Each unit also writes `*.allocs`, its sampled allocations, for
+`go tool pprof -sample_index=alloc_space`; garbage collection is a large share
+of unit CPU, and this names the code that makes the garbage.
+
 Each unit's record also lists the size, count and a content fingerprint of
 every fact file it imported. Comparing the fingerprints of two profiled runs
 checks that an optimization left every dependency's facts unchanged, which is
