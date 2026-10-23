@@ -2,6 +2,7 @@ package factcodec
 
 import (
 	"go/types"
+	"slices"
 	"strings"
 
 	"github.com/fxamacker/cbor/v2"
@@ -76,8 +77,8 @@ func carryImportedTypes[T any](pkg *types.Package, table map[string]cbor.RawMess
 	}
 }
 
-// LookupMethod returns a method's summary from the table of the direct
-// import of pkg that carried its type.
+// LookupMethod returns a method's summary from the table of its type's own
+// package, or of the direct import of pkg that carried its type.
 func LookupMethod[T any](pkg *types.Package, method *types.Func, imported ImportTable[T]) (T, bool) {
 	var zero T
 	receiver := factscope.Receiver(method)
@@ -85,6 +86,19 @@ func LookupMethod[T any](pkg *types.Package, method *types.Func, imported Import
 		return zero, false
 	}
 	key := typeKey(receiver)
+	// A type's own package's table is definitive: every carried entry is a
+	// copy of it.
+	if slices.Contains(pkg.Imports(), receiver.Pkg()) {
+		table, ok := imported(receiver.Pkg())
+		if !ok {
+			return zero, false
+		}
+		group, ok := table.Lookup(key)
+		if !ok {
+			return zero, false
+		}
+		return group.Lookup(method.Name())
+	}
 	for _, dependency := range pkg.Imports() {
 		table, ok := imported(dependency)
 		if !ok {
