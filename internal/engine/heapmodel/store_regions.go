@@ -387,12 +387,19 @@ func (graph *regionGraph) boundValue(value ssa.Value) {
 }
 
 func buildRegionGraph(function *ssa.Function) *regionGraph {
+	// A graph interns about one region per instruction and gives about half
+	// its instructions pointees; sizing the maps for that up front spares
+	// them most of their growth.
+	instructions := 0
+	for _, block := range function.Blocks {
+		instructions += len(block.Instrs)
+	}
 	graph := &regionGraph{
 		function:  function,
-		regions:   map[regionKey]*region{},
-		values:    map[ssa.Value]pointees{},
+		regions:   make(map[regionKey]*region, instructions),
+		values:    make(map[ssa.Value]pointees, instructions/2),
 		views:     map[ssa.Value]sliceView{},
-		entry:     map[*ssa.BasicBlock]*regionState{},
+		entry:     make(map[*ssa.BasicBlock]*regionState, len(function.Blocks)),
 		history:   map[slot]pointees{},
 		budget:    proofs.NewSearchBudget(regionBuildBudget),
 		ids:       map[ssa.Instruction]int{},
