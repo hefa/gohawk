@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/kojah/gohawk/internal/analysis/factcodec"
 	"github.com/kojah/gohawk/internal/engine/heapmodel"
 	"github.com/kojah/gohawk/internal/engine/lifecycle"
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
@@ -843,5 +844,51 @@ func TestPublishedFactRoundTripsExactly(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, fact) {
 		t.Fatalf("round trip changed the fact:\n got %#v\nwant %#v", got.Heap, fact.Heap)
+	}
+}
+
+// A type's method summaries survive publication exactly, each found by its
+// method's name and nothing else.
+func TestSummaryGroupRoundTripExactly(t *testing.T) {
+	parameter := heapmodel.HeapSlot{Root: heapmodel.HeapRoot{Kind: heapmodel.HeapParameter}, Path: "field:0"}
+	facts := map[string]Fact{
+		"Close": {Must: MustClaims{OwnedResults: 1}},
+		"Write": {Heap: &heapmodel.HeapSummary{
+			Version:  heapmodel.SummaryVersion,
+			Requires: []heapmodel.HeapRequirement{{Slot: parameter, Method: "Flush"}},
+		}},
+	}
+	methods, err := encodeMethods(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A driver that passes facts in memory hands importers the published
+	// value itself, never decoded.
+	for name, want := range facts {
+		if fact, ok := methods.fact(name); !ok || !reflect.DeepEqual(fact, want) {
+			t.Errorf("%s in memory: got %+v, %v; want %+v", name, fact, ok, want)
+		}
+	}
+	published := &publishedMethods{factcodec.Wrap(methods)}
+	data, err := published.GobEncode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded publishedMethods
+	if err := decoded.GobDecode(data); err != nil {
+		t.Fatal(err)
+	}
+	got, err := decoded.Value()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range facts {
+		fact, ok := got.fact(name)
+		if !ok || !reflect.DeepEqual(fact, want) {
+			t.Errorf("%s: got %+v, %v; want %+v", name, fact, ok, want)
+		}
+	}
+	if _, ok := got.fact("Read"); ok {
+		t.Error("a method without a summary was found")
 	}
 }

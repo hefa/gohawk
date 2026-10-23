@@ -4,6 +4,7 @@
 package lifecyclefacts
 
 import (
+	"go/types"
 	"maps"
 	"reflect"
 	"slices"
@@ -24,7 +25,7 @@ var Analyzer = &analysis.Analyzer{
 	Name:       "lifecyclefacts",
 	Doc:        "exports internal lifecycle ownership summaries",
 	Requires:   []*analysis.Analyzer{buildssa.Analyzer},
-	FactTypes:  []analysis.Fact{new(publishedFact), new(publishedCleanup), new(publishedPackage)},
+	FactTypes:  []analysis.Fact{new(publishedFact), new(publishedCleanup), new(publishedPackage), new(publishedMethods), new(publishedFunctions)},
 	ResultType: reflect.TypeFor[Summaries](),
 	Run:        run,
 }
@@ -123,19 +124,8 @@ func summarizePackage(pass *analysis.Pass, importersOnly bool) (any, error) {
 	// function of every dependency.
 	slices.Sort(marker.Bodiless)
 	pass.ExportPackageFact(&publishedPackage{factcodec.Wrap(*marker)})
-	// A method no importer can see is never an importer's callee, so its
-	// fact, and the marker's reading of its absence, are never consulted.
-	visible := factscope.API(pass.Pkg)
-	for _, function := range local {
-		fact := summaries[function]
-		fact.Must.ReturnedView = returnedViews(pass, function, fact, summaries)
-		summaries[function] = fact
-		if !fact.empty() && visible.Contains(function.Object()) {
-			pass.ExportObjectFact(function.Object(), publish(fact))
-		}
-		if fact.Heap != nil {
-			heapmodel.RegisterHeapSummary(function, *fact.Heap)
-		}
+	if err := exportSummaries(pass, local, summaries); err != nil {
+		return nil, err
 	}
 	// A type's contract needs its constructor and its methods, so it is joined
 	// once both are summarized rather than while either is being proved.
@@ -278,4 +268,25 @@ func factFor(pass *analysis.Pass, instruction ssa.Instruction) (Fact, bool) {
 		}
 	}
 	return Fact{}, false
+}
+
+// exportSummaries publishes the package's summaries once every function is
+// summarized: a function's own fact, or its method group's entry.
+func exportSummaries(pass *analysis.Pass, local []*ssa.Function, summaries Summaries) error {
+	// A method no importer can see is never an importer's callee, so its
+	// fact, and the marker's reading of its absence, are never consulted.
+	visible := factscope.API(pass.Pkg)
+	var groups summaryGroups
+	for _, function := range local {
+		fact := summaries[function]
+		fact.Must.ReturnedView = returnedViews(pass, function, fact, summaries)
+		summaries[function] = fact
+		if object, ok := function.Object().(*types.Func); ok && !fact.empty() && visible.Contains(object) && !groups.add(object, fact) {
+			pass.ExportObjectFact(object, publish(fact))
+		}
+		if fact.Heap != nil {
+			heapmodel.RegisterHeapSummary(function, *fact.Heap)
+		}
+	}
+	return groups.publish(pass)
 }

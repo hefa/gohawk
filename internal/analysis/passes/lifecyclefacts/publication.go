@@ -88,14 +88,12 @@ func factForFunction(pass *analysis.Pass, function *ssa.Function) (Fact, bool) {
 		if err != nil {
 			return Fact{}, false
 		}
-		// An older heap fact may describe a returned field address as the
-		// field's contents. None of its derived claims are safe to import
-		// under the newer edge semantics.
-		if fact.Heap != nil && fact.Heap.Version != heapmodel.SummaryVersion {
-			return Fact{}, false
+		return importedFact(fact, resolved)
+	}
+	if declared, ok := object.(*types.Func); ok {
+		if fact, ok := importedGroupFact(pass, declared); ok {
+			return importedFact(fact, resolved)
 		}
-		fact.signature = resolved.Signature
-		return fact, true
 	}
 	// No summary of its own: proven to do nothing if its package was
 	// summarized and the function was in scope for summarizing, which is
@@ -112,6 +110,18 @@ func factForFunction(pass *analysis.Pass, function *ssa.Function) (Fact, bool) {
 		return Fact{}, false
 	}
 	return Fact{}, true
+}
+
+// importedFact checks an imported summary and attaches its declaration's
+// signature. An older heap fact may describe a returned field address as the
+// field's contents; none of its derived claims are safe to import under the
+// newer edge semantics.
+func importedFact(fact Fact, resolved *ssa.Function) (Fact, bool) {
+	if fact.Heap != nil && fact.Heap.Version != heapmodel.SummaryVersion {
+		return Fact{}, false
+	}
+	fact.signature = resolved.Signature
+	return fact, true
 }
 
 func receiverCount(signature *types.Signature) int {
