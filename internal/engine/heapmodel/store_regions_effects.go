@@ -331,7 +331,7 @@ func (graph *regionGraph) call(state *regionState, common *ssa.CallCommon, instr
 		return
 	}
 	graph.invalidateForeign(state, "", graph.id(instruction), reachEscaped)
-	effects := ssacall.NewCallEffects(graph.budget)
+	var effects *ssacall.CallEffects
 	for _, argument := range arguments {
 		set := graph.pointees(argument)
 		if closure != nil && slices.Contains(closure.Bindings, argument) {
@@ -340,6 +340,9 @@ func (graph *regionGraph) call(state *regionState, common *ssa.CallCommon, instr
 				graph.clobber(state, set, graph.id(instruction))
 			}
 			continue
+		}
+		if effects == nil {
+			effects = ssacall.NewCallEffects(graph.budget)
 		}
 		proof := effects.Call(instruction, argument)
 		switch {

@@ -32,11 +32,11 @@ type CallGraphMemo[Key comparable, Answer any] struct {
 	cut bool
 }
 
+// NewCallGraphMemo returns an empty memo. Its maps are made on first write:
+// a memo is made for every call a region graph transfers, and most are
+// asked nothing.
 func NewCallGraphMemo[Key comparable, Answer any]() *CallGraphMemo[Key, Answer] {
-	return &CallGraphMemo[Key, Answer]{
-		entered: map[*ssa.Function]bool{},
-		answers: map[Key]Answer{},
-	}
+	return &CallGraphMemo[Key, Answer]{}
 }
 
 // Answer returns the memoized answer for key, computing it once. An answer
@@ -53,6 +53,9 @@ func (memo *CallGraphMemo[Key, Answer]) Answer(key Key, compute func() Answer) A
 	memo.cut = false
 	answer := compute()
 	if !memo.cut {
+		if memo.answers == nil {
+			memo.answers = map[Key]Answer{}
+		}
 		memo.answers[key] = answer
 	}
 	memo.cut = outer || memo.cut
@@ -69,6 +72,9 @@ func (memo *CallGraphMemo[Key, Answer]) Enter(function *ssa.Function) bool {
 	if function == nil || memo.entered[function] {
 		memo.cut = true
 		return false
+	}
+	if memo.entered == nil {
+		memo.entered = map[*ssa.Function]bool{}
 	}
 	memo.entered[function] = true
 	return true

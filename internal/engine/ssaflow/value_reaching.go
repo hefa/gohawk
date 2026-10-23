@@ -212,10 +212,11 @@ func (walk ReachingWalk) branch() ReachingWalk {
 // visitedValues is a walk's cycle guard. Most walks visit a handful of
 // values, so the first few are kept inline and a map is built only past
 // them; a map per walk was most of what reaching folds allocated. On caddy,
-// 86% of walks visit one value and 0.2% more than four. Walks copied by
-// value share one set, as they shared one map.
+// 86% of walks visit one value and 0.2% more than four. Three inline values
+// keep the set in a 64-byte size class. Walks copied by value share one set,
+// as they shared one map.
 type visitedValues struct {
-	inline [4]ssa.Value
+	inline [3]ssa.Value
 	count  int
 	spill  map[ssa.Value]bool
 }
