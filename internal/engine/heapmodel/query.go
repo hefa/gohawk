@@ -238,7 +238,9 @@ func (graph *regionGraph) aliasProof(left, right ssa.Value) proofs.AliasProof {
 			}
 		}
 	}
-	graph.disjoint = append(graph.disjoint, AliasDecision{Value: left, Target: right, Reason: reason})
+	if recordAliasDecisions.Load() {
+		graph.disjoint = append(graph.disjoint, AliasDecision{Value: left, Target: right, Reason: reason})
+	}
 	return proofs.AliasProof{Aliases: false, Reason: reason, Provenance: proofs.EvidenceFromLocalSSA}
 }
 

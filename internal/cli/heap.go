@@ -47,6 +47,7 @@ func printHeap(arguments []string, output, errorsOutput io.Writer) error {
 	if len(flags.Args()) == 0 {
 		return errors.New("at least one package pattern is required")
 	}
+	heapmodel.RecordAliasDecisions()
 	functions, err := heapFunctions(flags.Args(), *bare)
 	if err != nil {
 		return err

@@ -141,6 +141,8 @@ func unwrapInterface(value ssa.Value) ssa.Value { //nolint:ireturn // Test helpe
 // longer holds what it held; a placeholder still matches what was ever
 // stored into its slot, and a dynamic element matches every element.
 func TestRegionGraphMayAlias(t *testing.T) {
+	// The dump turns the disjointness record on before it analyzes.
+	RecordAliasDecisions()
 	for _, test := range []struct {
 		name string
 		body string

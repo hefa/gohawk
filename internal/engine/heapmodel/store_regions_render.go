@@ -7,10 +7,21 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
 	"golang.org/x/tools/go/ssa"
 )
+
+// recordAliasDecisions turns on the disjointness record RenderRegions prints.
+// Nothing else reads it, and recording every answer was a large share of what
+// graph queries allocated, so only a process that will dump graphs pays.
+var recordAliasDecisions atomic.Bool
+
+// RecordAliasDecisions makes every graph built afterwards keep its
+// disjointness answers for RenderRegions. Call it before the analysis whose
+// graphs will be dumped.
+func RecordAliasDecisions() { recordAliasDecisions.Store(true) }
 
 // RenderRegions prints the points-to graph of a function for the ssa
 // subcommand: each tracked value with the slots it may refer to, then the

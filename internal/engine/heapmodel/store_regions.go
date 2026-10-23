@@ -231,7 +231,8 @@ type regionGraph struct {
 	unkR   *region
 	// ids number instructions and blocks so stamps are stable.
 	ids map[ssa.Instruction]int
-	// disjoint records every disjointness answer, for attribution.
+	// disjoint records every disjointness answer for the heap dump, only
+	// while RecordAliasDecisions is on.
 	disjoint []AliasDecision
 	// callResults holds the pointees a summarized multi-result call gave
 	// each of its results, for the extracts that select them.
