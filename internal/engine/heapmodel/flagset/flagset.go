@@ -11,8 +11,10 @@ import (
 	"maps"
 )
 
-// Inline is how many members a set holds before it spills to a map.
-const Inline = 4
+// Inline is how many members a set holds before it spills to a map. Two
+// keeps a heap pointee set in a 64-byte size class; profiles of real
+// repositories allocated less with two than with one or four.
+const Inline = 2
 
 // Set is a set of keys with a flag each. Its zero value is empty and ready
 // to use; reads through a nil *Set see an empty set. A Set holds its members
