@@ -480,12 +480,14 @@ func (graph *regionGraph) fixpoint() (GraphBuildReason, string) {
 	graph.entry[function.Blocks[0]] = newRegionState()
 	out := map[*ssa.BasicBlock]*regionState{}
 	headers := loopHeaders(function)
+	acyclic := !hasRetreatingEdge(graph.order, len(function.Blocks))
 	// unsettled explains a body that never settles: the blocks that still
 	// changed in the last round. Earlier rounds change on every ordinary
 	// loop, and describing those differences cost more than the transfers.
 	var unsettled []string
 	var previous *loopSnapshot
 	rounds := regionFixpointRounds + regionWideningRounds
+	unspent := graph.budget.Remaining()
 	for round := range rounds {
 		last := round == rounds-1
 		graph.widening = previous
@@ -509,12 +511,9 @@ func (graph *regionGraph) fixpoint() (GraphBuildReason, string) {
 					current.recordEntry(block, in)
 				}
 			}
-			state := in.clone()
-			for _, instruction := range block.Instrs {
-				if !graph.budget.Spend() {
-					return GraphBuildBudgetExhausted, ""
-				}
-				graph.transfer(state, instruction)
+			state, ok := graph.runBlock(block, in)
+			if !ok {
+				return GraphBuildBudgetExhausted, ""
 			}
 			if previous, ok := out[block]; !ok || !previous.equal(state) {
 				changed = true
@@ -524,10 +523,8 @@ func (graph *regionGraph) fixpoint() (GraphBuildReason, string) {
 			}
 			out[block] = state
 		}
-		if !changed {
-			graph.exit = out
-			graph.widening = nil
-			return GraphBuildComplete, ""
+		if !changed || round == 0 && acyclic {
+			return graph.settle(out, changed, unspent-graph.budget.Remaining())
 		}
 		if current != nil {
 			current.recordPhis(graph, headers)
@@ -536,6 +533,62 @@ func (graph *regionGraph) fixpoint() (GraphBuildReason, string) {
 	}
 	graph.widening = nil
 	return GraphBuildFixpointLimit, "in " + strconv.Itoa(rounds) + " rounds; changes: " + strings.Join(unsettled, " | ")
+}
+
+// Without a retreating edge every block follows all its predecessors in
+// reverse postorder, and every value it reads is defined before it, so the
+// first round computes each out state from final inputs and a second round
+// could only confirm them. It was half of all region graph work. The skipped
+// round is still charged to the build budget, so which functions build does
+// not change. A transfer's call-effect proofs spend that budget too, so the
+// charge is what the first round spent, not one unit per instruction.
+
+// hasRetreatingEdge reports whether an edge leads to a block no later in
+// order than its source: a loop, reducible or not.
+func hasRetreatingEdge(order []*ssa.BasicBlock, blocks int) bool {
+	position := make([]int, blocks)
+	for index, block := range order {
+		position[block.Index] = index + 1
+	}
+	for _, block := range order {
+		for _, successor := range block.Succs {
+			if position[successor.Index] <= position[block.Index] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// runBlock transfers a block's instructions over its own copy of in, and
+// reports false when the build budget runs out.
+func (graph *regionGraph) runBlock(block *ssa.BasicBlock, in *regionState) (*regionState, bool) {
+	state := in.clone()
+	for _, instruction := range block.Instrs {
+		if !graph.budget.Spend() {
+			return nil, false
+		}
+		graph.transfer(state, instruction)
+	}
+	return state, true
+}
+
+// settle accepts the out states. A round that still changed them is the
+// first round of a loop-free function, and the confirming round it skips is
+// charged as if it ran: that round would repeat the first round's transfers
+// from the same states, call-effect proofs included, so it would spend what
+// the first round spent.
+func (graph *regionGraph) settle(out map[*ssa.BasicBlock]*regionState, changed bool, spent int) (GraphBuildReason, string) {
+	graph.widening = nil
+	if changed {
+		for range spent {
+			if !graph.budget.Spend() {
+				return GraphBuildBudgetExhausted, ""
+			}
+		}
+	}
+	graph.exit = out
+	return GraphBuildComplete, ""
 }
 
 // entryState merges the predecessors' out states into the block's entry

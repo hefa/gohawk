@@ -59,6 +59,11 @@ honest: an entry carried around a back edge whose object was created inside
 the loop is marked *stale*, because the pointer then denotes an earlier
 iteration's object. A stale entry supports may-answers only.
 
+A body without a loop needs one round: every block follows its
+predecessors in reverse postorder, so the first round already computes its
+final states. The build budget is still charged for the confirming round it
+skips, so the same functions build.
+
 The fixpoint runs six plain rounds, and a body that settles in them keeps
 exactly the least fixpoint they compute. Some loops grow by one step a
 round instead: a walk over a linked structure reads one more unwritten
