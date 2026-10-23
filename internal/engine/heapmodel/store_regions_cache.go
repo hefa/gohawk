@@ -246,3 +246,20 @@ func valueFunction(value ssa.Value) *ssa.Function {
 	}
 	return nil
 }
+
+// releaseGraphs drops the cached graphs of a program's functions and their
+// index entries.
+func releaseGraphs(program *ssa.Program) {
+	regionGraphs.Lock()
+	defer regionGraphs.Unlock()
+	for function, element := range regionGraphs.entries {
+		if function.Prog == program {
+			evictLocked(element.Value.(*regionGraphEntry)) //nolint:forcetypeassert // The list holds only entries.
+		}
+	}
+	for function := range regionGraphs.dependents {
+		if function.Prog == program {
+			delete(regionGraphs.dependents, function)
+		}
+	}
+}

@@ -110,6 +110,18 @@ the processes do not each start threads for every CPU the others are using.
 Set `GOMAXPROCS` to choose the per-package thread count yourself; note that it
 also sets how many packages `go vet` analyzes at once.
 
+### In-process runner (experimental)
+
+Set `GOHAWK_IN_PROCESS=1` to analyze in one process instead of one `go vet`
+process per package. gohawk then analyzes the same packages the same way, and
+reports the same findings, but decodes each dependency's export data once
+rather than in every package that imports it, and keeps facts in memory
+instead of writing them to files. On large modules it allocates about half as
+much and takes about half the CPU time. It runs as many packages at once as
+`GOMAXPROCS` allows, and holds the export data of every dependency until it
+is done, so its peak memory can be higher than that of the largest `go vet`
+process.
+
 ## Ignore an intentional finding
 
 Put an ignore comment on the flagged line or the line above it:

@@ -59,14 +59,16 @@ type cliResult struct {
 
 // Main runs the gohawk command and returns its exit code.
 //
-// gohawk does not analyze a whole program in one process: a standalone run
+// gohawk does not analyze a whole program at once: a standalone run
 // delegates to `go vet -vettool=<self>`, so dependencies are type-checked from
 // export data and each package's SSA is built and freed one at a time. That
 // keeps memory bounded on projects with large dependencies, where loading the
 // entire closure at once would exhaust it. Rich output and check selection
 // are preserved by post-processing go vet's JSON here. When
 // go vet invokes this same binary as its tool, the invocation carries a .cfg
-// file and is answered by unitchecker instead.
+// file and is answered by unitchecker instead. With GOHAWK_IN_PROCESS set,
+// the runner package analyzes the same units in this process, one at a time
+// per job, without go vet's per-unit processes and fact files.
 func Main() int {
 	runtime := cliRuntime{
 		output:        os.Stdout,
@@ -81,6 +83,9 @@ func Main() int {
 		return result.exitCode
 	}
 	if result.invocation.delegate {
+		if runtime.getenv(inProcessVariable) != "" {
+			return runInProcess(result.invocation, runtime)
+		}
 		return runViaGoVet(result.invocation, runtime)
 	}
 	// A vet-tool handshake: unitchecker owns os.Exit, so this returns only in

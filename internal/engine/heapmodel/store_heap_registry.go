@@ -17,11 +17,13 @@ import (
 // so a call to a summarized function is applied by substitution instead of
 // forgetting every object the caller did not allocate.
 
-// heapSummaryLimit bounds the registry. Past it nothing more is registered
-// and a later lookup that misses is merely conservative. The registry never
-// forgets what it holds: a summary that came and went with the order of
-// requests would make the same package analyze differently from one run
-// to the next.
+// heapSummaryLimit bounds the registry's entries for one program, the
+// package a unit analyzes with its imports. Past it nothing more is
+// registered for that program and a later lookup that misses is merely
+// conservative. The registry never forgets what it holds while the program
+// is analyzed: a summary that came and went with the order of requests would
+// make the same package analyze differently from one run to the next. Release
+// forgets a program once its unit is done.
 const heapSummaryLimit = 131072
 
 // heapEntryState is where a callee's summary stands in the registry. A
@@ -55,7 +57,49 @@ var heapSummaries = struct {
 	sync.Mutex
 	entries     map[*ssa.Function]heapEntry
 	generations map[*ssa.Function]int
-}{entries: map[*ssa.Function]heapEntry{}, generations: map[*ssa.Function]int{}}
+	// counts holds how many entries each program has, for the limit.
+	counts map[*ssa.Program]int
+}{entries: map[*ssa.Function]heapEntry{}, generations: map[*ssa.Function]int{}, counts: map[*ssa.Program]int{}}
+
+// Release forgets every summary, graph and memo kept for the functions of
+// program. A process that analyzes one package and exits need not call it.
+// One that analyzes many calls it once each package is done, so that a
+// package's state neither keeps its memory alive nor counts against the
+// limits of the packages analyzed after it.
+func Release(program *ssa.Program) {
+	heapSummaries.Lock()
+	for function := range heapSummaries.entries {
+		if function.Prog == program {
+			delete(heapSummaries.entries, function)
+		}
+	}
+	for function := range heapSummaries.generations {
+		if function.Prog == program {
+			delete(heapSummaries.generations, function)
+		}
+	}
+	delete(heapSummaries.counts, program)
+	heapSummaries.Unlock()
+	callCycleReach.Lock()
+	for function := range callCycleReach.reach {
+		if function.Prog == program {
+			delete(callCycleReach.reach, function)
+		}
+	}
+	for function := range callCycleReach.metadata {
+		if function.Prog == program {
+			delete(callCycleReach.metadata, function)
+		}
+	}
+	callCycleReach.Unlock()
+	releaseGraphs(program)
+	functionNames.Range(func(key, _ any) bool {
+		if key.(*ssa.Function).Prog == program { //nolint:forcetypeassert // The map holds only functions.
+			functionNames.Delete(key)
+		}
+		return true
+	})
+}
 
 // RegisterHeapSummary makes the summary available to every graph built
 // afterwards for calls to the function. A summary that differs from what
@@ -66,9 +110,12 @@ func RegisterHeapSummary(function *ssa.Function, summary HeapSummary) {
 	}
 	heapSummaries.Lock()
 	previous, ok := heapSummaries.entries[function]
-	if !ok && len(heapSummaries.entries) >= heapSummaryLimit {
+	if !ok && heapSummaries.counts[function.Prog] >= heapSummaryLimit {
 		heapSummaries.Unlock()
 		return
+	}
+	if !ok {
+		heapSummaries.counts[function.Prog]++
 	}
 	heapSummaries.entries[function] = heapEntry{summary: summary}
 	changed := !ok || previous.state != heapEntryReady || !heapSummariesEqual(previous.summary, summary)
@@ -165,6 +212,7 @@ func projectHeapOnDemand(function *ssa.Function) (HeapSummary, bool) {
 		return entry.summary, entry.state == heapEntryReady
 	}
 	heapSummaries.entries[function] = heapEntry{state: heapEntryProjecting}
+	heapSummaries.counts[function.Prog]++
 	heapSummaries.Unlock()
 	summary, ok := ProjectHeap(function)
 	if ok {
