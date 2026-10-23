@@ -112,12 +112,12 @@ func TestResultRelations(t *testing.T) {
 		"OpenForwarded":        {cases: []ResultCase{nonNilWhenErrorNil, nilWhenErrorNonNil}},
 		"OpenMaybeNil":         {cases: []ResultCase{nilWhenErrorNonNil}},
 		"OpenLeaky":            {cases: []ResultCase{nonNilWhenErrorNil}},
-		"OpenUnknown":          {returned: []ReturnedParameter{{0, 0}, {1, 1}}},
+		"OpenUnknown":          {returned: []ReturnedParameter{{Result: 0, Parameter: 0}, {Result: 1, Parameter: 1}}},
 		"OpenAfterCall":        {cases: []ResultCase{nilWhenErrorNonNil}},
-		"Same":                 {returned: []ReturnedParameter{{0, 0}}},
+		"Same":                 {returned: []ReturnedParameter{{Result: 0, Parameter: 0}}},
 		"Chosen":               {},
 		"Erased":               {},
-		"Rewrapped":            {returned: []ReturnedParameter{{0, 0}}},
+		"Rewrapped":            {returned: []ReturnedParameter{{Result: 0, Parameter: 0}}},
 	}
 	self := pkg.Prog.LookupMethod(types.NewPointer(pkg.Type("box").Type()), pkg.Pkg, "Self")
 	if parameter, ok := NewEngine().Function(self, proofs.NewSearchBudget(4000)).ReturnedParameter(0); !ok || parameter != 0 {

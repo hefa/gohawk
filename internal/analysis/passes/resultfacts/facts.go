@@ -21,6 +21,7 @@ const factVersion = 4
 // implication that held on every return under its condition; its absence is
 // not the opposite implication.
 type Fact struct {
+	_            struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Version      int
 	Results      []Guarantee
 	Cases        []ResultCase

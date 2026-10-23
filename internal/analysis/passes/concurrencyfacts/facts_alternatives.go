@@ -22,6 +22,7 @@ import (
 
 // FactAlternative is one published path alternative.
 type FactAlternative struct {
+	_                  struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Effects            []Effect
 	Workers            []WorkerEffect
 	CancellationInputs []int
@@ -33,6 +34,7 @@ type FactAlternative struct {
 // the tested formal, or -1 for a condition inside the function, numbered by
 // Internal. Constant, when present, is what the tested value is compared with.
 type FactCondition struct {
+	_         struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Parameter int
 	Internal  int
 	Constant  FactConstant
@@ -43,6 +45,7 @@ type FactCondition struct {
 // FactReturned says result Index is Constant, or cannot be nil when Constant
 // is absent.
 type FactReturned struct {
+	_        struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Index    int
 	Constant FactConstant
 }
@@ -60,6 +63,7 @@ const (
 
 // FactConstant is a constant in a form that round-trips exactly.
 type FactConstant struct {
+	_     struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Kind  FactConstantKind
 	Exact string
 }

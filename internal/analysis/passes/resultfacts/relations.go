@@ -24,6 +24,7 @@ import (
 // ResultCase is one proven implication: result Result has Outcome on every
 // normal return where Condition holds.
 type ResultCase struct {
+	_         struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Condition ssacall.CallCondition
 	Result    int
 	Outcome   ssacall.Outcome
@@ -34,6 +35,7 @@ type ResultCase struct {
 // receiver and a pass-through wrapper have this shape; a caller may then
 // treat the result as the argument it passed.
 type ReturnedParameter struct {
+	_         struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Result    int
 	Parameter int
 }

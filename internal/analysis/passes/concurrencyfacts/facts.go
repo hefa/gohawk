@@ -27,6 +27,7 @@ const (
 
 // Effect is an ordered operation on a formal parameter (receiver at index zero).
 type Effect struct {
+	_         struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Kind      Kind
 	Parameter int
 	Fields    []int
@@ -40,6 +41,7 @@ type Effect struct {
 // formal parameters. Prefix counts synchronous effects before the launch;
 // each call instantiates a separate child with its own call-site identity.
 type WorkerEffect struct {
+	_       struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Effects []Effect
 	Prefix  int
 }
@@ -47,6 +49,7 @@ type WorkerEffect struct {
 // Fact records an exhaustive sequence, including an empty sequence. Any
 // CancellationInputs must be discharged before that sequence is usable proof.
 type Fact struct {
+	_       struct{} `cbor:",toarray"` // published as a CBOR array; see factcodec
 	Version int
 	Effects []Effect
 	Workers []WorkerEffect
