@@ -66,7 +66,7 @@ func run(pass *analysis.Pass) (any, error) {
 			continue
 		}
 		summary := engine.Function(function, proofs.NewSearchBudget(proofs.SummaryBudget))
-		if summary.Available {
+		if summary.Available && summary.claimsAnything() {
 			pass.ExportObjectFact(object, &publishedFact{factcodec.Wrap(Fact{
 				Version: factVersion, Results: slices.Clone(summary.results), Cases: slices.Clone(summary.cases), Returned: slices.Clone(summary.returned),
 				NeverReturns: summary.neverReturns,
@@ -74,6 +74,23 @@ func run(pass *analysis.Pass) (any, error) {
 		}
 	}
 	return engine, nil
+}
+
+// claimsAnything reports whether a summary says something an importer can
+// use. Every consumer needs a known result, a case, a returned parameter or
+// termination as well as availability, so a summary with none of them reads
+// the same as no fact, and nine in ten exported functions have one: every
+// importer down the build paid to read it.
+func (summary Summary) claimsAnything() bool {
+	if summary.neverReturns || len(summary.cases) != 0 || len(summary.returned) != 0 {
+		return true
+	}
+	for _, result := range summary.results {
+		if result != Unknown {
+			return true
+		}
+	}
+	return false
 }
 
 // importedFact decodes the fact published for object. A fact that does not

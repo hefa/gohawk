@@ -1,6 +1,7 @@
 package resultfacts
 
 import (
+	"slices"
 	"testing"
 
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
@@ -34,7 +35,10 @@ func TestCrossPackageResults(t *testing.T) {
 				local := engine.Function(function, proofs.NewSearchBudget(2000))
 				call := ssaflow.InstructionsOf[*ssa.Call](function)[0]
 				imported := engine.Function(call.Common().StaticCallee(), proofs.NewSearchBudget(2000))
-				if !local.Available || !imported.Available {
+				// A summary that claims nothing is not published, which every
+				// consumer reads the same as an unavailable one.
+				claims := slices.ContainsFunc(expected, func(guarantee Guarantee) bool { return guarantee != Unknown })
+				if !local.Available || claims && !imported.Available {
 					t.Errorf("%s: missing component", function)
 				}
 				for index, guarantee := range expected {
