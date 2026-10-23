@@ -281,13 +281,13 @@ func freshOrigin(object *region) string {
 	switch origin := object.origin.(type) {
 	case *ssa.Call:
 		if callee := origin.Common().StaticCallee(); callee != nil {
-			return callee.String()
+			return functionName(callee)
 		}
 		return "call"
 	case *ssa.Extract:
 		if call, ok := origin.Tuple.(*ssa.Call); ok {
 			if callee := call.Common().StaticCallee(); callee != nil {
-				return callee.String()
+				return functionName(callee)
 			}
 		}
 		return "call"
@@ -351,17 +351,27 @@ func (projection *heapProjection) edges(states []*regionState, returns []*ssa.Re
 			entry.add(projection.targetOf(pointee), false)
 		}
 	})
-	var edges []HeapEdge
-	for from, entry := range witnesses {
-		must := entry.returns == relevant[from.Root] && entry.exits == 1 && !entry.stale
-		for _, witnessed := range entry.targets {
-			target := witnessed.target
-			edge := HeapEdge{From: from, To: target, Must: must && witnessed.exit && target.Kind != HeapTargetUnknown}
-			if edgeWorthListing(edge, entry.exitsBeyondFresh) {
-				edges = append(edges, edge)
+	// The edges are published as they are made; listing them twice, first
+	// to count them, makes them in one array of their final size.
+	listed := func(visit func(HeapEdge)) {
+		for from, entry := range witnesses {
+			must := entry.returns == relevant[from.Root] && entry.exits == 1 && !entry.stale
+			for _, witnessed := range entry.targets {
+				target := witnessed.target
+				edge := HeapEdge{From: from, To: target, Must: must && witnessed.exit && target.Kind != HeapTargetUnknown}
+				if edgeWorthListing(edge, entry.exitsBeyondFresh) {
+					visit(edge)
+				}
 			}
 		}
 	}
+	count := 0
+	listed(func(HeapEdge) { count++ })
+	if count == 0 {
+		return nil
+	}
+	edges := make([]HeapEdge, 0, count)
+	listed(func(edge HeapEdge) { edges = append(edges, edge) })
 	slices.SortFunc(edges, publishedEdgeOrder)
 	return edges
 }
