@@ -130,12 +130,15 @@ func (graph *regionGraph) setValue(value ssa.Value, set pointees) {
 	if !tracked(value.Type()) {
 		return
 	}
-	existing, ok := graph.values[value]
-	if !ok {
+	// The bound applies to a value's first set as well as to later unions,
+	// or the first round would see an overfull set every later round
+	// collapses, and a loop-free body would need a second round only to
+	// apply it.
+	if existing, ok := graph.values[value]; ok {
+		existing.union(set)
+	} else {
 		graph.values[value] = set.clone()
-		return
 	}
-	existing.union(set)
 	graph.boundValue(value)
 }
 
