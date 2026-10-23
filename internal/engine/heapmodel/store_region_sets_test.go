@@ -137,10 +137,12 @@ func TestRegionStateScalarCloneIsIndependentAndWritable(t *testing.T) {
 	state.escaped[owner] = true
 	state.escapes[target] = HeapEscape(1)
 	copy := state.clone()
-	delete(copy.backing, target)
-	copy.stepEpochs["field"] = 3
-	copy.clobbered[target] = 4
-	copy.escaped[owner] = false
+	// The maps are shared after a clone; changes go through the mutable
+	// accessors.
+	delete(copy.mutableBacking(), target)
+	copy.mutableStepEpochs()["field"] = 3
+	copy.mutableClobbered()[target] = 4
+	copy.mutableEscaped()[owner] = false
 	// Escapes are shared after a clone; changes go through addEscape.
 	copy.addEscape(target, HeapEscape(2))
 	if state.backing[target] != owner || state.stepEpochs["field"] != 1 || state.clobbered[target] != 2 ||
@@ -155,10 +157,10 @@ func TestRegionStateScalarCloneIsIndependentAndWritable(t *testing.T) {
 		t.Fatal("an original's escape reached its clone")
 	}
 	copy = (&regionState{}).clone()
-	copy.backing[target] = owner
-	copy.stepEpochs["field"] = 1
-	copy.clobbered[target] = 2
-	copy.escaped[owner] = true
+	copy.mutableBacking()[target] = owner
+	copy.mutableStepEpochs()["field"] = 1
+	copy.mutableClobbered()[target] = 2
+	copy.mutableEscaped()[owner] = true
 	copy.addEscape(target, HeapEscape(1))
 }
 
@@ -199,8 +201,8 @@ func TestRegionStateContentsCloneIsIndependentAndWritable(t *testing.T) {
 	copy.writable(owner)[second] = true
 	copy.writable(empty)[second] = false
 	state.writable(owner)[first] = true
-	copy.deferred[first] = true
-	copy.deferred[second] = false
+	copy.mutableDeferred()[first] = true
+	copy.mutableDeferred()[second] = false
 	if !state.contents[owner][first] || len(state.contents[owner]) != 1 || state.contents[empty] != nil ||
 		state.deferred[first] || len(state.deferred) != 1 {
 		t.Fatal("changing stored or deferred snapshot evidence changed the original state")
@@ -209,7 +211,7 @@ func TestRegionStateContentsCloneIsIndependentAndWritable(t *testing.T) {
 		t.Fatal("a writable set lost its change or took the original's")
 	}
 	copy = newRegionState().clone()
-	copy.deferred[first] = false
+	copy.mutableDeferred()[first] = false
 }
 
 func TestPointeesUnion(t *testing.T) {

@@ -52,6 +52,10 @@ type regionState struct {
 	// it before the first change. Escapes are most of what a clone copied,
 	// and most blocks add none.
 	escapesShared bool
+	// shared marks the stamp, snapshot and flag maps a clone still shares;
+	// the mutable accessors copy one before its first change. Most blocks
+	// change none of them.
+	shared sharedMaps
 	// ran marks function values that code the graph cannot see invoked.
 	// Running a callback is not keeping it, so it is no escape; but what
 	// the callback captured may have been written, so the projection cuts
@@ -110,20 +114,74 @@ func (state *regionState) clone() *regionState {
 	result := &regionState{
 		contents:   cloneRegionMap(state.contents),
 		owned:      map[slot]bool{},
-		backing:    cloneRegionMap(state.backing),
+		backing:    state.backing,
 		epoch:      state.epoch,
 		reachEpoch: state.reachEpoch,
-		stepEpochs: cloneRegionMap(state.stepEpochs),
-		clobbered:  cloneRegionMap(state.clobbered),
-		escaped:    cloneRegionMap(state.escaped),
-		ran:        maps.Clone(state.ran),
+		stepEpochs: state.stepEpochs,
+		clobbered:  state.clobbered,
+		escaped:    state.escaped,
+		ran:        state.ran,
 		escapes:    state.escapes,
 		opaque:     state.opaque,
-		deferred:   cloneRegionMap(state.deferred),
+		deferred:   state.deferred,
 		calls:      slices.Clone(state.calls),
 	}
 	result.escapesShared = true
+	result.shared = sharedAll
+	state.shared = sharedAll
 	return result
+}
+
+// sharedMaps names the maps a state shares with a clone.
+type sharedMaps uint8
+
+const (
+	sharedBacking sharedMaps = 1 << iota
+	sharedStepEpochs
+	sharedClobbered
+	sharedEscaped
+	sharedRan
+	sharedDeferred
+	sharedAll = sharedBacking | sharedStepEpochs | sharedClobbered | sharedEscaped | sharedRan | sharedDeferred
+)
+
+// ownMap returns current, copied first if the state shares it or has none.
+func ownMap[K comparable, V any](state *regionState, which sharedMaps, current map[K]V) map[K]V {
+	if state.shared&which == 0 && current != nil {
+		return current
+	}
+	state.shared &^= which
+	return cloneRegionMap(current)
+}
+
+func (state *regionState) mutableBacking() map[slot]*region {
+	state.backing = ownMap(state, sharedBacking, state.backing)
+	return state.backing
+}
+
+func (state *regionState) mutableStepEpochs() map[string]int {
+	state.stepEpochs = ownMap(state, sharedStepEpochs, state.stepEpochs)
+	return state.stepEpochs
+}
+
+func (state *regionState) mutableClobbered() map[slot]int {
+	state.clobbered = ownMap(state, sharedClobbered, state.clobbered)
+	return state.clobbered
+}
+
+func (state *regionState) mutableEscaped() map[*region]bool {
+	state.escaped = ownMap(state, sharedEscaped, state.escaped)
+	return state.escaped
+}
+
+func (state *regionState) mutableRan() map[*region]bool {
+	state.ran = ownMap(state, sharedRan, state.ran)
+	return state.ran
+}
+
+func (state *regionState) mutableDeferred() pointees {
+	state.deferred = ownMap(state, sharedDeferred, state.deferred)
+	return state.deferred
 }
 
 // addEscape records that the slot escaped in the given ways, copying a
@@ -183,13 +241,13 @@ func (graph *regionGraph) merge(state, other *regionState, backEdge bool, header
 	graph.mergeContents(state, other, backEdge, header)
 	graph.mergeBacking(state, other, header)
 	graph.mergeStamps(state, other, header)
-	maps.Copy(state.escaped, other.escaped)
-	maps.Copy(state.ran, other.ran)
+	maps.Copy(state.mutableEscaped(), other.escaped)
+	maps.Copy(state.mutableRan(), other.ran)
 	for target, kinds := range other.escapes {
 		state.addEscape(target, kinds)
 	}
 	state.opaque = state.opaque || other.opaque
-	state.deferred.union(other.deferred)
+	state.mutableDeferred().union(other.deferred)
 	for _, call := range other.calls {
 		if !slices.Contains(state.calls, call) {
 			state.calls = append(state.calls, call)
@@ -246,11 +304,11 @@ func (graph *regionGraph) mergeBacking(state, other *regionState, header *ssa.Ba
 		mine, present := state.backing[target]
 		switch {
 		case !present:
-			state.backing[target] = snapshot
+			state.mutableBacking()[target] = snapshot
 		case mine != snapshot:
-			delete(state.backing, target)
+			delete(state.mutableBacking(), target)
 			if _, ok := state.clobbered[target]; !ok {
-				state.clobbered[target] = graph.blockID(header)
+				state.mutableClobbered()[target] = graph.blockID(header)
 			}
 		}
 	}
@@ -258,7 +316,7 @@ func (graph *regionGraph) mergeBacking(state, other *regionState, header *ssa.Ba
 		if mine, ok := state.clobbered[target]; ok && mine != stamp {
 			stamp = graph.blockID(header)
 		}
-		state.clobbered[target] = stamp
+		state.mutableClobbered()[target] = stamp
 	}
 }
 
@@ -271,12 +329,12 @@ func (graph *regionGraph) mergeStamps(state, other *regionState, header *ssa.Bas
 	}
 	for step, stamp := range other.stepEpochs {
 		if state.stepEpochs[step] != stamp {
-			state.stepEpochs[step] = graph.blockID(header)
+			state.mutableStepEpochs()[step] = graph.blockID(header)
 		}
 	}
 	for step := range state.stepEpochs {
 		if _, present := other.stepEpochs[step]; !present {
-			state.stepEpochs[step] = graph.blockID(header)
+			state.mutableStepEpochs()[step] = graph.blockID(header)
 		}
 	}
 }
@@ -412,7 +470,7 @@ func (state *regionState) forgetStoredSubtree(target slot) {
 	}
 	for other := range state.backing {
 		if other.region == target.region && slotBeneath(other.path, target.path) {
-			delete(state.backing, other)
+			delete(state.mutableBacking(), other)
 		}
 	}
 }
@@ -496,20 +554,20 @@ func (graph *regionGraph) widen(state, previous *regionState, header *ssa.BasicB
 	}
 	for step, epoch := range state.stepEpochs {
 		if old, ok := previous.stepEpochs[step]; !ok || old != epoch {
-			state.stepEpochs[step] = stamp
+			state.mutableStepEpochs()[step] = stamp
 		}
 	}
 	for target, snapshot := range state.backing {
 		if previous.backing[target] != snapshot {
-			delete(state.backing, target)
+			delete(state.mutableBacking(), target)
 			if _, ok := state.clobbered[target]; !ok {
-				state.clobbered[target] = stamp
+				state.mutableClobbered()[target] = stamp
 			}
 		}
 	}
 	for target, epoch := range state.clobbered {
 		if old, ok := previous.clobbered[target]; !ok || old != epoch {
-			state.clobbered[target] = stamp
+			state.mutableClobbered()[target] = stamp
 		}
 	}
 	if !maps.Equal(state.deferred, previous.deferred) && !state.deferred.unknown() {

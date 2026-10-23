@@ -36,7 +36,7 @@ func (graph *regionGraph) deferCall(state *regionState, deferred *ssa.Defer) {
 		arguments = append(arguments, common.Value)
 	}
 	for _, argument := range arguments {
-		state.deferred.union(graph.pointees(argument))
+		state.mutableDeferred().union(graph.pointees(argument))
 	}
 	state.calls = append(state.calls, deferred)
 }
@@ -97,14 +97,14 @@ func (graph *regionGraph) invalidateForeign(state *regionState, step string, sta
 		if step == "" || stepKey(target.path) == step || isIndexStep(step) && isIndexStep(lastStep(target.path)) {
 			delete(state.contents, target)
 			if target.region.kind == regionSite {
-				state.clobbered[target] = stamp
+				state.mutableClobbered()[target] = stamp
 			}
 		}
 	}
 	for target := range state.backing {
 		if graph.foreign(state, target.region, reach) && (step == "" || target.region.kind == regionSite) {
-			delete(state.backing, target)
-			state.clobbered[target] = stamp
+			delete(state.mutableBacking(), target)
+			state.mutableClobbered()[target] = stamp
 		}
 	}
 	// An escaped local the function never wrote has no entry to forget,
@@ -115,7 +115,7 @@ func (graph *regionGraph) invalidateForeign(state *regionState, step string, sta
 	// cannot be listed; the slots it did write keep their own entries.
 	for object := range state.escaped {
 		if object.kind == regionSite {
-			state.clobbered[slot{region: object}] = stamp
+			state.mutableClobbered()[slot{region: object}] = stamp
 		}
 	}
 	if step == "" {
@@ -125,14 +125,14 @@ func (graph *regionGraph) invalidateForeign(state *regionState, step string, sta
 		state.reachEpoch = stamp
 		return
 	}
-	state.stepEpochs[step] = stamp
+	state.mutableStepEpochs()[step] = stamp
 	if isIndexStep(step) {
 		for other := range state.stepEpochs {
 			if isIndexStep(other) {
-				state.stepEpochs[other] = stamp
+				state.mutableStepEpochs()[other] = stamp
 			}
 		}
-		state.stepEpochs[pathStar] = stamp
+		state.mutableStepEpochs()[pathStar] = stamp
 	}
 }
 
@@ -213,7 +213,7 @@ func (graph *regionGraph) escape(state *regionState, set pointees, kind HeapEsca
 		}
 		state.addEscape(target, kind)
 		if target.region.kind == regionSite {
-			state.escaped[target.region] = true
+			state.mutableEscaped()[target.region] = true
 		}
 		for held, contents := range state.contents {
 			if held.region == target.region && slotBeneath(held.path, target.path) {
@@ -278,7 +278,7 @@ func (graph *regionGraph) clobber(state *regionState, set pointees, stamp int) {
 			}
 		}
 		if object.kind == regionSite {
-			state.clobbered[slot{region: object}] = stamp
+			state.mutableClobbered()[slot{region: object}] = stamp
 			state.forgetStoredSubtree(slot{region: object})
 		}
 	}
@@ -364,7 +364,7 @@ func (graph *regionGraph) runCallback(state *regionState, common *ssa.CallCommon
 	}
 	set := graph.pointees(common.Value)
 	for target := range set {
-		state.ran[target.region] = true
+		state.mutableRan()[target.region] = true
 	}
 	graph.clobber(state, set, graph.id(instruction))
 }

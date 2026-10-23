@@ -175,12 +175,12 @@ func (graph *regionGraph) snapshotOf(state *regionState, addresses pointees, loa
 		stamp = graph.id(instruction)
 	}
 	if len(addresses) != 1 || addresses.unknown() {
-		state.clobbered[slot{region: snapshot}] = stamp
+		state.mutableClobbered()[slot{region: snapshot}] = stamp
 		return pointees{{region: snapshot}: false}
 	}
 	for address, stale := range addresses {
 		if lastStep(address.path) == pathStar {
-			state.clobbered[slot{region: snapshot}] = stamp
+			state.mutableClobbered()[slot{region: snapshot}] = stamp
 			graph.selectedSnapshot(state, address, stale, loaded, snapshot)
 			return pointees{{region: snapshot}: stale}
 		}
@@ -192,7 +192,7 @@ func (graph *regionGraph) snapshotOf(state *regionState, addresses pointees, loa
 		snapshot.stamp = versionStamp{epoch: graph.stampOf(state, address).epoch}
 		snapshot.stamps = maps.Clone(state.stepEpochs)
 		if clobber, ok := graph.clobberedBeneath(state, address); ok {
-			state.clobbered[slot{region: snapshot}] = clobber
+			state.mutableClobbered()[slot{region: snapshot}] = clobber
 		}
 		return pointees{{region: snapshot}: stale}
 	}
@@ -211,13 +211,13 @@ func (graph *regionGraph) copySubtree(state *regionState, source, destination sl
 		state.contents[copied] = set.clone()
 		graph.remember(copied, set)
 	}
-	copySlotMetadata(state.backing, source, destination)
+	copySlotMetadata(state.mutableBacking(), source, destination)
 	// Unknown writes beneath the copied aggregate stay unknown in its
 	// snapshot. Otherwise an old backing copy can restore overwritten fields.
-	copySlotMetadata(state.clobbered, source, destination)
+	copySlotMetadata(state.mutableClobbered(), source, destination)
 	if backing, rest, ok := graph.backingOf(state, source); ok {
 		if _, direct := state.backing[destination]; !direct {
-			state.backing[destination] = graph.snapshotBeneath(backing, rest)
+			state.mutableBacking()[destination] = graph.snapshotBeneath(backing, rest)
 		}
 	}
 }
@@ -300,10 +300,10 @@ func (graph *regionGraph) storeAggregate(state *regionState, target slot, value 
 		graph.remember(target, value)
 		graph.copySubtree(state, source, target)
 		if _, direct := state.backing[target]; !direct {
-			state.backing[target] = graph.snapshotBeneath(source.region, source.path)
+			state.mutableBacking()[target] = graph.snapshotBeneath(source.region, source.path)
 		}
 		if clobber, ok := graph.clobberedBeneath(state, source); ok {
-			state.clobbered[target] = clobber
+			state.mutableClobbered()[target] = clobber
 		}
 	}
 }
@@ -313,7 +313,7 @@ func (graph *regionGraph) storeAggregate(state *regionState, target slot, value 
 func (graph *regionGraph) forgetStoredSlot(state *regionState, target slot, stamp int) {
 	graph.forgetWholeAbove(state, target)
 	graph.clearSubtree(state, target)
-	state.clobbered[target] = stamp
+	state.mutableClobbered()[target] = stamp
 }
 
 // remember records, for the whole build, that the slot was given the value.
@@ -371,7 +371,7 @@ func (graph *regionGraph) clearSubtree(state *regionState, target slot) {
 	state.forgetStoredSubtree(target)
 	for other := range state.clobbered {
 		if other.region == target.region && slotBeneath(other.path, target.path) {
-			delete(state.clobbered, other)
+			delete(state.mutableClobbered(), other)
 		}
 	}
 }

@@ -287,7 +287,7 @@ func (substitution *heapSubstitution) forgetSlots(set pointees) {
 				delete(substitution.state.contents, known)
 			}
 		}
-		substitution.state.stepEpochs[stepKey(target.path)] = substitution.graph.id(substitution.instruction)
+		substitution.state.mutableStepEpochs()[stepKey(target.path)] = substitution.graph.id(substitution.instruction)
 	}
 }
 
