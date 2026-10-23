@@ -60,9 +60,13 @@ func (visible Visible) Contains(object types.Object) bool {
 
 type walker struct {
 	// pkg, when set, keeps the walk to its own types.
-	pkg     *types.Package
-	objects map[types.Object]bool
-	types   map[types.Type]bool
+	pkg *types.Package
+	// callable keeps the walk to what code in another package can use: no
+	// unexported method, and no unexported field unless it is embedded,
+	// which promotes its methods.
+	callable bool
+	objects  map[types.Object]bool
+	types    map[types.Type]bool
 }
 
 func (walk walker) object(object types.Object) {
@@ -93,20 +97,13 @@ func (walk walker) typ(typ types.Type) {
 	case *types.Signature:
 		walk.signature(typed)
 	case *types.Struct:
-		for field := range typed.Fields() {
-			walk.object(field)
-		}
+		walk.structure(typed)
 	case *types.Tuple:
 		for variable := range typed.Variables() {
 			walk.object(variable)
 		}
 	case *types.Interface:
-		for method := range typed.Methods() {
-			walk.object(method)
-		}
-		for embedded := range typed.EmbeddedTypes() {
-			walk.typ(embedded)
-		}
+		walk.iface(typed)
 	case *types.Union:
 		for term := range typed.Terms() {
 			walk.typ(term.Type())
@@ -131,6 +128,29 @@ func (walk walker) named(typed *types.Named) {
 	walk.parameters(origin.TypeParams())
 	walk.typ(origin.Underlying())
 	for method := range origin.Methods() {
+		walk.method(method)
+	}
+}
+
+func (walk walker) structure(typed *types.Struct) {
+	for field := range typed.Fields() {
+		if !walk.callable || field.Exported() || field.Embedded() {
+			walk.object(field)
+		}
+	}
+}
+
+func (walk walker) iface(typed *types.Interface) {
+	for method := range typed.Methods() {
+		walk.method(method)
+	}
+	for embedded := range typed.EmbeddedTypes() {
+		walk.typ(embedded)
+	}
+}
+
+func (walk walker) method(method *types.Func) {
+	if !walk.callable || method.Exported() {
 		walk.object(method)
 	}
 }
@@ -187,9 +207,11 @@ func Receiver(object *types.Func) *types.TypeName {
 }
 
 // Types returns every declared type, of pkg or of another package, that
-// importers of pkg can reach through its API: the types whose facts pkg must
-// carry for them. Unlike API it follows other packages' types, their
-// fields, exported or not, and their methods, as an importer can. The fact
+// code importing pkg can hold a value of and call a method on through pkg's
+// API: the types whose method facts pkg must carry for its importers.
+// Unlike API it follows other packages' types. An importer is another
+// package, so it can follow neither an unexported method nor an unexported
+// field; an embedded one still promotes the methods of its type. The fact
 // passes of one unit share the answer.
 func Types(pkg *types.Package) map[*types.TypeName]bool {
 	typesCache.Lock()
@@ -197,7 +219,7 @@ func Types(pkg *types.Package) map[*types.TypeName]bool {
 	if typesCache.pkg == pkg {
 		return typesCache.types
 	}
-	walk := walker{objects: map[types.Object]bool{}, types: map[types.Type]bool{}}
+	walk := walker{callable: true, objects: map[types.Object]bool{}, types: map[types.Type]bool{}}
 	scope := pkg.Scope()
 	for _, name := range scope.Names() {
 		if token.IsExported(name) {
