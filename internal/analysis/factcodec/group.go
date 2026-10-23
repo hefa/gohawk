@@ -112,3 +112,22 @@ func (group *Group[T]) Members(owner types.Object, pkg *types.Package, wrap func
 	}
 	return members
 }
+
+// Raw returns the named entry's encoding, to publish again unchanged.
+func (group *Group[T]) Raw(name string) (cbor.RawMessage, bool) {
+	index, found := slices.BinarySearch(group.Names, name)
+	if !found {
+		return nil, false
+	}
+	return group.Entries[index], true
+}
+
+// NewRawGroup makes a group of entries already encoded.
+func NewRawGroup[T any](entries map[string]cbor.RawMessage) Group[T] {
+	names := slices.Sorted(maps.Keys(entries))
+	encoded := make([]cbor.RawMessage, len(names))
+	for index, name := range names {
+		encoded[index] = entries[name]
+	}
+	return Group[T]{Names: names, Entries: encoded, decoded: newGroupDecodes[T](len(names))}
+}

@@ -25,7 +25,7 @@ var Analyzer = &analysis.Analyzer{
 	Name:       "lifecyclefacts",
 	Doc:        "exports internal lifecycle ownership summaries",
 	Requires:   []*analysis.Analyzer{buildssa.Analyzer},
-	FactTypes:  []analysis.Fact{new(publishedFact), new(publishedCleanup), new(publishedPackage), new(publishedMethods), new(publishedFunctions)},
+	FactTypes:  []analysis.Fact{new(publishedFact), new(publishedCleanup), new(publishedPackage), new(publishedFunctions), new(publishedTypes)},
 	ResultType: reflect.TypeFor[Summaries](),
 	Run:        run,
 }

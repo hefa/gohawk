@@ -59,6 +59,7 @@ func (visible Visible) Contains(object types.Object) bool {
 }
 
 type walker struct {
+	// pkg, when set, keeps the walk to its own types.
 	pkg     *types.Package
 	objects map[types.Object]bool
 	types   map[types.Type]bool
@@ -122,7 +123,7 @@ func (walk walker) named(typed *types.Named) {
 		}
 	}
 	origin := typed.Origin()
-	if walk.types[origin] || origin.Obj().Pkg() != walk.pkg {
+	if walk.types[origin] || walk.pkg != nil && origin.Obj().Pkg() != walk.pkg {
 		return
 	}
 	walk.types[origin] = true
@@ -183,4 +184,38 @@ func Receiver(object *types.Func) *types.TypeName {
 		return nil
 	}
 	return named.Origin().Obj()
+}
+
+// Types returns every declared type, of pkg or of another package, that
+// importers of pkg can reach through its API: the types whose facts pkg must
+// carry for them. Unlike API it follows other packages' types, their
+// fields, exported or not, and their methods, as an importer can. The fact
+// passes of one unit share the answer.
+func Types(pkg *types.Package) map[*types.TypeName]bool {
+	typesCache.Lock()
+	defer typesCache.Unlock()
+	if typesCache.pkg == pkg {
+		return typesCache.types
+	}
+	walk := walker{objects: map[types.Object]bool{}, types: map[types.Type]bool{}}
+	scope := pkg.Scope()
+	for _, name := range scope.Names() {
+		if token.IsExported(name) {
+			walk.object(scope.Lookup(name))
+		}
+	}
+	reached := map[*types.TypeName]bool{}
+	for object := range walk.objects {
+		if name, ok := object.(*types.TypeName); ok {
+			reached[name] = true
+		}
+	}
+	typesCache.pkg, typesCache.types = pkg, reached
+	return reached
+}
+
+var typesCache struct {
+	sync.Mutex
+	pkg   *types.Package
+	types map[*types.TypeName]bool
 }

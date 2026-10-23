@@ -869,12 +869,12 @@ func TestSummaryGroupRoundTripExactly(t *testing.T) {
 			t.Errorf("%s in memory: got %+v, %v; want %+v", name, fact, ok, want)
 		}
 	}
-	published := &publishedMethods{factcodec.Wrap(methods)}
+	published := &publishedFunctions{factcodec.Wrap(methods)}
 	data, err := published.GobEncode()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decoded publishedMethods
+	var decoded publishedFunctions
 	if err := decoded.GobDecode(data); err != nil {
 		t.Fatal(err)
 	}
