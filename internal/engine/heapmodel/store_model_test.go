@@ -1,7 +1,9 @@
 package heapmodel
 
 import (
+	"fmt"
 	"go/token"
+	"strings"
 	"testing"
 
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
@@ -147,7 +149,7 @@ func TestGraphBuildReasonCodes(t *testing.T) {
 	want := map[GraphBuildReason]string{
 		GraphBuildUnknown: "graph-build-unknown", GraphBuildComplete: "graph-build-complete",
 		GraphBuildNoBody: "graph-build-no-body", GraphBuildBudgetExhausted: "graph-build-budget-exhausted",
-		GraphBuildFixpointLimit: "graph-build-fixpoint-limit",
+		GraphBuildFixpointLimit: "graph-build-fixpoint-limit", GraphBuildStateLimit: "graph-build-state-limit",
 	}
 	if len(want) != int(graphBuildReasonCount) {
 		t.Fatal("every reason needs a boundary spelling assertion")
@@ -190,6 +192,76 @@ func opaque()
 	graph.buildReason, graph.buildDetail = GraphBuildFixpointLimit, "in 6 rounds; changes: example"
 	if graph.buildFailureText() != "fixpoint did not settle in 6 rounds; changes: example" {
 		t.Fatal("fixpoint dump spelling changed")
+	}
+}
+
+// opcodeLoop writes a function shaped like go-json's generated encoders: a
+// loop around one switch whose cases each store through a context pointer.
+// With distinct fields every case writes its own field, so the state each
+// block keeps grows with the number of cases; otherwise every case writes
+// the same field, and the function has as many blocks but a small state.
+func opcodeLoop(cases int, distinct bool) string {
+	var source strings.Builder
+	source.WriteString("package opcodes\ntype context struct {\n")
+	for index := range cases {
+		fmt.Fprintf(&source, "\tf%d *int\n", index)
+	}
+	source.WriteString("}\nfunc run(c *context, ops []int, p *int) {\n\tfor _, op := range ops {\n\t\tswitch op {\n")
+	for index := range cases {
+		field := 0
+		if distinct {
+			field = index
+		}
+		fmt.Fprintf(&source, "\t\tcase %d:\n\t\t\tc.f%d = p\n", index, field)
+	}
+	source.WriteString("\t\t}\n\t}\n}\n")
+	return source.String()
+}
+
+// stateCharge rebuilds the function's graph under a state budget of limit
+// entries and returns the build reason and the entries it charged.
+func stateCharge(graph *regionGraph, limit int) (GraphBuildReason, int) {
+	graph.budget = proofs.NewSearchBudget(regionBuildBudget)
+	graph.stateBudget = proofs.NewSearchBudget(limit)
+	reason, _ := graph.fixpoint()
+	return reason, limit - graph.stateBudget.Remaining()
+}
+
+// The state budget bounds what the build copies, not how large the function
+// is. Two loops with the same blocks differ only in how many fields their
+// cases write; under a budget twice what the narrow one needs, the narrow
+// one completes and the wide one stops and answers nothing.
+func TestGraphBuildStateBudget(t *testing.T) {
+	const cases = 64
+	narrow := buildRegionGraph(ssaflowtest.BuildPackage(t, "opcodes", opcodeLoop(cases, false)).Func("run"))
+	wide := buildRegionGraph(ssaflowtest.BuildPackage(t, "opcodes", opcodeLoop(cases, true)).Func("run"))
+	for name, graph := range map[string]*regionGraph{"narrow": narrow, "wide": wide} {
+		if !graph.available {
+			t.Fatalf("%s loop unavailable at the production budget: %s", name, graph.buildReason)
+		}
+	}
+	if len(narrow.function.Blocks) != len(wide.function.Blocks) {
+		t.Fatalf("loops differ in blocks: %d and %d", len(narrow.function.Blocks), len(wide.function.Blocks))
+	}
+	reason, needed := stateCharge(narrow, regionStateBudget)
+	if reason != GraphBuildComplete {
+		t.Fatalf("narrow loop: %s", reason)
+	}
+	limit := 2 * needed
+	if reason, _ := stateCharge(narrow, limit); reason != GraphBuildComplete {
+		t.Fatalf("narrow loop under %d entries: %s", limit, reason)
+	}
+	reason, _ = stateCharge(wide, limit)
+	if reason != GraphBuildStateLimit {
+		t.Fatalf("wide loop under %d entries: %s, want %s", limit, reason, GraphBuildStateLimit)
+	}
+	wide.buildReason, wide.available = reason, false
+	if wide.buildFailureText() != "state limit exhausted" {
+		t.Fatal("state limit dump spelling changed")
+	}
+	parameter := wide.function.Params[0]
+	if _, ok := wide.pointsToUnlocked(parameter); ok {
+		t.Fatal("a graph past the state budget still answered")
 	}
 }
 

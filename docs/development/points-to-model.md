@@ -137,7 +137,16 @@ reason, `disjoint-paths`, `disjoint-objects`, or `unescaped-local`, and
 checked against the graph that gave it.
 
 Exhaustion of the build budget, or a fixpoint that does not settle, makes
-the whole graph unavailable and every answer unknown. A slot recorded as
+the whole graph unavailable and every answer unknown. The build has two
+budgets because instructions do not measure memory. The instruction budget
+counts transfers and is shared with the call-effect proofs the build runs.
+The state budget counts the entries the build copies when it keeps a block's
+entry and exit states, so a function with thousands of blocks over one large
+state stops early instead of holding thousands of copies of it. go-json's
+generated encoders, one opcode switch of about 2,400 blocks, spent few
+instructions but grew past 20 GB before this bound
+([kojah/gohawk#51](https://github.com/kojah/gohawk/issues/51)); they now end
+with `graph-build-state-limit`. A slot recorded as
 holding more than a bounded number of objects, which a buffer appended to
 at every site of a large function does, is widened to `unknown` instead:
 may-answers about it say yes, must-answers say no, and the graph stays

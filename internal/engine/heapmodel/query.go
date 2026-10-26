@@ -153,6 +153,7 @@ const (
 	GraphBuildNoBody
 	GraphBuildBudgetExhausted
 	GraphBuildFixpointLimit
+	GraphBuildStateLimit
 	graphBuildReasonCount
 )
 
@@ -169,6 +170,8 @@ func (reason GraphBuildReason) String() string {
 		return "graph-build-budget-exhausted"
 	case GraphBuildFixpointLimit:
 		return "graph-build-fixpoint-limit"
+	case GraphBuildStateLimit:
+		return "graph-build-state-limit"
 	default:
 		return "invalid-graph-build-reason"
 	}
@@ -183,6 +186,8 @@ func (graph *regionGraph) buildFailureText() string {
 		return "budget exhausted"
 	case GraphBuildFixpointLimit:
 		return "fixpoint did not settle " + graph.buildDetail
+	case GraphBuildStateLimit:
+		return "state limit exhausted"
 	default:
 		return ""
 	}

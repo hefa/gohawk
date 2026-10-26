@@ -113,6 +113,19 @@ func (state *regionState) clone() *regionState {
 	return result
 }
 
+// size counts the entries a clone of the state copies: every slot and each
+// object it holds, and every entry of the flat maps beside them. It is the
+// unit the graph build charges for keeping a state, so it tracks memory,
+// not the number of instructions that produced it.
+func (state *regionState) size() int {
+	entries := len(state.backing) + len(state.stepEpochs) + len(state.clobbered) + len(state.escaped) +
+		len(state.ran) + len(state.escapes) + len(state.deferred) + len(state.calls)
+	for _, set := range state.contents {
+		entries += 1 + len(set)
+	}
+	return entries
+}
+
 // cloneRegionMap copies flat state maps through the runtime's map clone rather
 // than hashing each entry again. A zero state still needs writable maps.
 func cloneRegionMap[K comparable, V any](source map[K]V) map[K]V {

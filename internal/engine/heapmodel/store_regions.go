@@ -201,8 +201,11 @@ type regionGraph struct {
 	// order is the reverse postorder the fixpoint used.
 	order  []*ssa.BasicBlock
 	budget *proofs.SearchBudget
-	nilR   *region
-	unkR   *region
+	// stateBudget bounds the state entries the build copies; see
+	// regionStateBudget.
+	stateBudget *proofs.SearchBudget
+	nilR        *region
+	unkR        *region
 	// ids number instructions and blocks so stamps are stable.
 	ids map[ssa.Instruction]int
 	// disjoint records every disjointness answer, for attribution.
@@ -289,6 +292,24 @@ type sliceView struct {
 // than half-modeled.
 const regionBuildBudget = 200_000
 
+// regionStateBudget bounds the state entries one graph build may copy,
+// across every fixpoint round. The instruction budget above does not bound
+// memory: the build keeps a whole state on entry to every block and another
+// at its exit, so a function with thousands of blocks that all touch the
+// same objects holds thousands of copies of a large state while spending
+// few instructions. go-json's generated encoders are one opcode switch of
+// about 2,400 blocks loading through one context pointer, and their graphs
+// grew past 20 GB:
+// https://github.com/goccy/go-json/blob/v0.10.5/internal/encoder/vm_color/vm.go#L14
+// A function past this bound is unavailable, like one past the instruction
+// budget: every question about it answers unknown, which suppresses a
+// diagnostic rather than inventing one. The bound is a separate budget
+// because the instruction budget is shared with the call-effect proofs the
+// build runs, and charging states there would change their answers on
+// ordinary functions. The largest ordinary function measured in go-json
+// copies about 460,000 entries, so the bound leaves twice that.
+const regionStateBudget = 1_000_000
+
 // regionFixpointRounds bounds the rounds over the blocks. Ordinary loops
 // settle in two or three; a body that has not settled by then is unavailable.
 const regionFixpointRounds = 6
@@ -314,16 +335,17 @@ func valueFunction(value ssa.Value) *ssa.Function {
 
 func buildRegionGraph(function *ssa.Function) *regionGraph {
 	graph := &regionGraph{
-		function:  function,
-		regions:   map[regionKey]*region{},
-		values:    map[ssa.Value]pointees{},
-		views:     map[ssa.Value]sliceView{},
-		entry:     map[*ssa.BasicBlock]*regionState{},
-		history:   map[slot]pointees{},
-		budget:    proofs.NewSearchBudget(regionBuildBudget),
-		ids:       map[ssa.Instruction]int{},
-		recorded:  map[ssa.Instruction]int{},
-		consulted: map[*ssa.Function]int{},
+		function:    function,
+		regions:     map[regionKey]*region{},
+		values:      map[ssa.Value]pointees{},
+		views:       map[ssa.Value]sliceView{},
+		entry:       map[*ssa.BasicBlock]*regionState{},
+		history:     map[slot]pointees{},
+		budget:      proofs.NewSearchBudget(regionBuildBudget),
+		stateBudget: proofs.NewSearchBudget(regionStateBudget),
+		ids:         map[ssa.Instruction]int{},
+		recorded:    map[ssa.Instruction]int{},
+		consulted:   map[*ssa.Function]int{},
 	}
 	graph.nilR = graph.intern(regionKey{kind: regionNil})
 	graph.unkR = graph.intern(regionKey{kind: regionUnknown})
@@ -402,6 +424,12 @@ func (graph *regionGraph) fixpoint() (GraphBuildReason, string) {
 			if in == nil {
 				continue
 			}
+			// The entry state and the copy the block transforms both stay
+			// alive until the build ends, so both are charged before the
+			// copy is made.
+			if !graph.chargeStates(2 * in.size()) {
+				return GraphBuildStateLimit, ""
+			}
 			state := in.clone()
 			for _, instruction := range block.Instrs {
 				if !graph.budget.Spend() {
@@ -423,6 +451,17 @@ func (graph *regionGraph) fixpoint() (GraphBuildReason, string) {
 		}
 	}
 	return GraphBuildFixpointLimit, "in " + strconv.Itoa(regionFixpointRounds) + " rounds; changes: " + strings.Join(unsettled, " | ")
+}
+
+// chargeStates spends the state budget for copying entries, and reports
+// whether the build may continue.
+func (graph *regionGraph) chargeStates(entries int) bool {
+	for range entries {
+		if !graph.stateBudget.Spend() {
+			return false
+		}
+	}
+	return true
 }
 
 // entryState merges the predecessors' out states into the block's entry
