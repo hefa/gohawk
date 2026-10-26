@@ -2,13 +2,16 @@ package heapmodel
 
 import (
 	"bytes"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
 	"github.com/kojah/gohawk/internal/engine/ssaflow/ssaflowtest"
+	"golang.org/x/tools/go/analysis/passes/buildssa"
 	"golang.org/x/tools/go/ssa"
 )
 
@@ -110,13 +113,13 @@ type File struct{ fd int }
 func keep(f *File) *File { return f }
 `)
 	function := pkg.Func("keep")
-	heapSummaries.Lock()
-	heapSummaries.entries[function] = heapEntry{state: heapEntryProjecting}
-	heapSummaries.Unlock()
+	cachesOf(function).summaries.Lock()
+	cachesOf(function).summaries.entries[function] = heapEntry{state: heapEntryProjecting}
+	cachesOf(function).summaries.Unlock()
 	t.Cleanup(func() {
-		heapSummaries.Lock()
-		delete(heapSummaries.entries, function)
-		heapSummaries.Unlock()
+		cachesOf(function).summaries.Lock()
+		delete(cachesOf(function).summaries.entries, function)
+		cachesOf(function).summaries.Unlock()
 	})
 	summary, ok := projectHeapOnDemand(function)
 	if !ok || !strings.Contains(summary.String(), "edge R0 -> P0 must") {
@@ -527,4 +530,54 @@ func exactEverywhere(flag bool) { if flag { mark(); return }; mark() }
 	if !onEveryReturn(function, proofs.NewSearchBudget(100), calls) {
 		t.Fatal("a bounded search missed calls on every return")
 	}
+}
+
+// A program's caches go once its buildssa result is unreachable, so a
+// long-lived driver does not keep every package it has analyzed. Before they
+// were scoped to the program, analyzing 3,000 small packages in one process
+// left about 2 GB in use.
+func TestProgramCachesReleasedWithBuildResult(t *testing.T) {
+	pkg := ssaflowtest.BuildPackage(t, "released", `package released
+type File struct{ fd int }
+func keep(f *File) *File { return f }
+`)
+	program := pkg.Prog
+	func() {
+		BindProgramLifetime(&buildssa.SSA{Pkg: pkg})
+		if _, ok := heapSummaryOf(pkg.Func("keep")); !ok {
+			t.Fatal("no summary projected for keep")
+		}
+	}()
+	for range 200 {
+		runtime.GC()
+		if !programCached(program) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("program caches outlived the buildssa result")
+}
+
+// A program no one binds keeps its caches for the life of the process, as
+// go vet's one-package processes and tests that build SSA directly expect.
+func TestUnboundProgramCachesPersist(t *testing.T) {
+	pkg := ssaflowtest.BuildPackage(t, "unbound", `package unbound
+type File struct{ fd int }
+func keep(f *File) *File { return f }
+`)
+	if _, ok := heapSummaryOf(pkg.Func("keep")); !ok {
+		t.Fatal("no summary projected for keep")
+	}
+	runtime.GC()
+	runtime.GC()
+	if !programCached(pkg.Prog) {
+		t.Fatal("unbound program lost its caches")
+	}
+}
+
+func programCached(program *ssa.Program) bool {
+	programs.Lock()
+	defer programs.Unlock()
+	_, cached := programs.caches[program]
+	return cached
 }

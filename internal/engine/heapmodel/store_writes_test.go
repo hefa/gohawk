@@ -279,9 +279,9 @@ func pointerMixed(p,q *box,pick bool) *box { b := &box{next:p}; if pick { b.next
 		if proof.Proven() != (name == "stable") {
 			t.Errorf("%s: unexpected proof %+v", name, proof)
 		}
-		regionGraphs.Lock()
-		_, built := regionGraphs.entries[function]
-		regionGraphs.Unlock()
+		cachesOf(function).graphs.Lock()
+		_, built := cachesOf(function).graphs.entries[function]
+		cachesOf(function).graphs.Unlock()
 		if built {
 			t.Errorf("%s: writes-only query requested a points-to graph", name)
 		}

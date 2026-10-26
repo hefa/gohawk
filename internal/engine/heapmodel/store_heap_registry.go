@@ -1,13 +1,110 @@
 package heapmodel
 
 import (
+	"container/list"
+	"runtime"
 	"slices"
 	"sync"
 
 	"github.com/kojah/gohawk/internal/engine/ssaflow"
 	ssacall "github.com/kojah/gohawk/internal/engine/ssaflow/calls"
+	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/passes/buildssa"
 	"golang.org/x/tools/go/ssa"
 )
+
+// Every cache of the heap model belongs to one SSA program: the summary
+// registry, the graph cache, and the call-cycle inventory. buildssa builds a
+// program per package, and every key is a function of that program, so an
+// entry made for one package is never read while analyzing another. Keeping
+// the caches per program lets them go when the package is done. Process-wide
+// caches kept every analyzed package alive in a long-lived driver, such as
+// the golangci-lint plugin, and their size limit made a package analyzed late
+// in the process see fewer summaries than the same package analyzed early.
+
+// programCaches is the state one SSA program owns.
+type programCaches struct {
+	summaries heapSummaryRegistry
+	graphs    regionGraphCacheState
+	cycles    callCycleCache
+	// bound records that the caches are released with the program's
+	// buildssa result.
+	bound bool
+}
+
+var programs = struct {
+	sync.Mutex
+	caches map[*ssa.Program]*programCaches
+}{caches: map[*ssa.Program]*programCaches{}}
+
+// cachesOf returns the caches of the function's program, creating them on
+// first use. A nil function, or one with no program, shares the caches of
+// the nil program.
+func cachesOf(function *ssa.Function) *programCaches {
+	var program *ssa.Program
+	if function != nil {
+		program = function.Prog
+	}
+	programs.Lock()
+	defer programs.Unlock()
+	return programCachesLocked(program)
+}
+
+func programCachesLocked(program *ssa.Program) *programCaches {
+	caches := programs.caches[program]
+	if caches == nil {
+		caches = &programCaches{
+			summaries: heapSummaryRegistry{entries: map[*ssa.Function]heapEntry{}, generations: map[*ssa.Function]int{}},
+			graphs: regionGraphCacheState{
+				order: list.New(), entries: map[*ssa.Function]*list.Element{},
+				dependents: map[*ssa.Function]map[*regionGraphEntry]bool{},
+			},
+			cycles: callCycleCache{reach: map[*ssa.Function]map[*ssa.Function]bool{}, metadata: map[*ssa.Function]*callCycleMetadata{}},
+		}
+		programs.caches[program] = caches
+	}
+	return caches
+}
+
+// BindProgramLifetime releases the caches of the result's program once the
+// result itself is unreachable. A weak table keyed by the program could not
+// do this: the cached graphs and summaries point back into the program, so
+// it would never become unreachable. The buildssa result is a small value
+// that only the analysis driver holds, and nothing here points at it.
+//
+// Every analyzer that reads the heap model lists buildssa among its
+// requirements, so the result stays reachable for as long as any of them is
+// analyzing the package. Binding is per program and idempotent; a program no
+// one binds keeps its caches for the life of the process, which is harmless
+// for go vet, where each package is analyzed in a process of its own.
+func BindProgramLifetime(result *buildssa.SSA) {
+	if result == nil || result.Pkg == nil || result.Pkg.Prog == nil {
+		return
+	}
+	program := result.Pkg.Prog
+	programs.Lock()
+	caches := programCachesLocked(program)
+	bound := caches.bound
+	caches.bound = true
+	programs.Unlock()
+	if !bound {
+		runtime.AddCleanup(result, releaseProgram, program)
+	}
+}
+
+// BindPassProgram binds the lifetime of the pass's SSA program, when the
+// pass has buildssa's result.
+func BindPassProgram(pass *analysis.Pass) {
+	if result, ok := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA); ok {
+		BindProgramLifetime(result)
+	}
+}
+
+func releaseProgram(program *ssa.Program) {
+	programs.Lock()
+	delete(programs.caches, program)
+	programs.Unlock()
+}
 
 // The registry hands heap summaries to the graph. The lifecycle pass
 // registers the summary of every callee it imports before it builds any
@@ -44,16 +141,17 @@ type heapEntry struct {
 	onDemand bool
 }
 
-// generations counts, per function, the registrations that changed its
-// summary and the on-demand summaries dropped. A graph remembers the
-// generation of each summary it consulted; a projection finishing on
-// demand, which only fills in what a cycle cut, does not count, so graphs
-// around a call cycle are not rebuilt forever.
-var heapSummaries = struct {
+// heapSummaryRegistry holds one program's summaries. generations counts, per
+// function, the registrations that changed its summary and the on-demand
+// summaries dropped. A graph remembers the generation of each summary it
+// consulted; a projection finishing on demand, which only fills in what a
+// cycle cut, does not count, so graphs around a call cycle are not rebuilt
+// forever.
+type heapSummaryRegistry struct {
 	sync.Mutex
 	entries     map[*ssa.Function]heapEntry
 	generations map[*ssa.Function]int
-}{entries: map[*ssa.Function]heapEntry{}, generations: map[*ssa.Function]int{}}
+}
 
 // RegisterHeapSummary makes the summary available to every graph built
 // afterwards for calls to the function. A summary that differs from what
@@ -62,18 +160,19 @@ func RegisterHeapSummary(function *ssa.Function, summary HeapSummary) {
 	if function == nil {
 		return
 	}
-	heapSummaries.Lock()
-	previous, ok := heapSummaries.entries[function]
-	if !ok && len(heapSummaries.entries) >= heapSummaryLimit {
-		heapSummaries.Unlock()
+	registry := &cachesOf(function).summaries
+	registry.Lock()
+	previous, ok := registry.entries[function]
+	if !ok && len(registry.entries) >= heapSummaryLimit {
+		registry.Unlock()
 		return
 	}
-	heapSummaries.entries[function] = heapEntry{summary: summary}
+	registry.entries[function] = heapEntry{summary: summary}
 	changed := !ok || previous.state != heapEntryReady || !heapSummariesEqual(previous.summary, summary)
 	if changed {
-		heapSummaries.generations[function]++
+		registry.generations[function]++
 	}
-	heapSummaries.Unlock()
+	registry.Unlock()
 	if changed {
 		invalidateDependents(function)
 	}
@@ -82,22 +181,24 @@ func RegisterHeapSummary(function *ssa.Function, summary HeapSummary) {
 // heapSummaryGeneration returns how many times the function's summary has
 // been replaced or dropped.
 func heapSummaryGeneration(function *ssa.Function) int {
-	heapSummaries.Lock()
-	defer heapSummaries.Unlock()
-	return heapSummaries.generations[function]
+	registry := &cachesOf(function).summaries
+	registry.Lock()
+	defer registry.Unlock()
+	return registry.generations[function]
 }
 
 // forgetOnDemandSummary drops a summary projected from a graph that was
 // found stale, and reports whether there was one to drop.
 func forgetOnDemandSummary(function *ssa.Function) bool {
-	heapSummaries.Lock()
-	defer heapSummaries.Unlock()
-	entry, ok := heapSummaries.entries[function]
+	registry := &cachesOf(function).summaries
+	registry.Lock()
+	defer registry.Unlock()
+	entry, ok := registry.entries[function]
 	if !ok || !entry.onDemand {
 		return false
 	}
-	delete(heapSummaries.entries, function)
-	heapSummaries.generations[function]++
+	delete(registry.entries, function)
+	registry.generations[function]++
 	return true
 }
 
@@ -136,9 +237,10 @@ func RegisteredHeapSummary(function *ssa.Function) (HeapSummary, bool) {
 // the summary when it is ready, and no answer while it is being projected
 // or when its projection was found unavailable.
 func registeredHeapSummary(function *ssa.Function) (HeapSummary, bool) {
-	heapSummaries.Lock()
-	defer heapSummaries.Unlock()
-	entry, ok := heapSummaries.entries[function]
+	registry := &cachesOf(function).summaries
+	registry.Lock()
+	defer registry.Unlock()
+	entry, ok := registry.entries[function]
 	return entry.summary, ok && entry.state == heapEntryReady
 }
 
@@ -154,26 +256,27 @@ func projectHeapOnDemand(function *ssa.Function) (HeapSummary, bool) {
 	if function == nil || len(function.Blocks) == 0 {
 		return HeapSummary{}, false
 	}
-	heapSummaries.Lock()
-	if entry, ok := heapSummaries.entries[function]; ok {
-		heapSummaries.Unlock()
+	registry := &cachesOf(function).summaries
+	registry.Lock()
+	if entry, ok := registry.entries[function]; ok {
+		registry.Unlock()
 		if entry.state == heapEntryProjecting {
 			return ProjectHeap(function)
 		}
 		return entry.summary, entry.state == heapEntryReady
 	}
-	heapSummaries.entries[function] = heapEntry{state: heapEntryProjecting}
-	heapSummaries.Unlock()
+	registry.entries[function] = heapEntry{state: heapEntryProjecting}
+	registry.Unlock()
 	summary, ok := ProjectHeap(function)
 	if ok {
-		heapSummaries.Lock()
-		heapSummaries.entries[function] = heapEntry{summary: summary, onDemand: true}
-		heapSummaries.Unlock()
+		registry.Lock()
+		registry.entries[function] = heapEntry{summary: summary, onDemand: true}
+		registry.Unlock()
 		return summary, true
 	}
-	heapSummaries.Lock()
-	heapSummaries.entries[function] = heapEntry{state: heapEntryMissing}
-	heapSummaries.Unlock()
+	registry.Lock()
+	registry.entries[function] = heapEntry{state: heapEntryMissing}
+	registry.Unlock()
 	return summary, false
 }
 
@@ -188,14 +291,14 @@ func projectHeapOnDemand(function *ssa.Function) (HeapSummary, bool) {
 // without a summary is, so each summary depends only on the callees outside
 // its cycle and every run computes the same one.
 
-// callCycleReach memoizes, per function, the functions of its package it
+// callCycleCache memoizes, per function, the functions of its package it
 // can reach through static calls. A package's call graph cannot leave it
 // and come back, because imports are acyclic, so the walk stays inside it.
-var callCycleReach = struct {
+type callCycleCache struct {
 	sync.Mutex
 	reach    map[*ssa.Function]map[*ssa.Function]bool
 	metadata map[*ssa.Function]*callCycleMetadata
-}{reach: map[*ssa.Function]map[*ssa.Function]bool{}, metadata: map[*ssa.Function]*callCycleMetadata{}}
+}
 
 // sameCallCycle reports whether the callee, called from function, can call
 // back into function.
@@ -230,9 +333,10 @@ func reachableCallees(function *ssa.Function) map[*ssa.Function]bool {
 	if function == nil {
 		return nil
 	}
-	callCycleReach.Lock()
-	reach, ok := callCycleReach.reach[function]
-	callCycleReach.Unlock()
+	cycles := &cachesOf(function).cycles
+	cycles.Lock()
+	reach, ok := cycles.reach[function]
+	cycles.Unlock()
 	if ok {
 		return reach
 	}
@@ -251,9 +355,9 @@ func reachableCallees(function *ssa.Function) map[*ssa.Function]bool {
 		reach[next] = true
 		pending = append(pending, cycleMetadata(next).callees...)
 	}
-	callCycleReach.Lock()
-	callCycleReach.reach[function] = reach
-	callCycleReach.Unlock()
+	cycles.Lock()
+	cycles.reach[function] = reach
+	cycles.Unlock()
 	return reach
 }
 
@@ -268,9 +372,10 @@ type callCycleMetadata struct {
 // cycleMetadata shares body discovery across reachability roots. Competing
 // readers may discover privately, but all reuse the first published inventory.
 func cycleMetadata(function *ssa.Function) *callCycleMetadata {
-	callCycleReach.Lock()
-	metadata := callCycleReach.metadata[function]
-	callCycleReach.Unlock()
+	cycles := &cachesOf(function).cycles
+	cycles.Lock()
+	metadata := cycles.metadata[function]
+	cycles.Unlock()
 	if metadata != nil {
 		return metadata
 	}
@@ -289,12 +394,12 @@ func cycleMetadata(function *ssa.Function) *callCycleMetadata {
 			metadata.callees = append(metadata.callees, origin)
 		}
 	}
-	callCycleReach.Lock()
-	defer callCycleReach.Unlock()
-	if published := callCycleReach.metadata[function]; published != nil {
+	cycles.Lock()
+	defer cycles.Unlock()
+	if published := cycles.metadata[function]; published != nil {
 		return published
 	}
-	callCycleReach.metadata[function] = metadata
+	cycles.metadata[function] = metadata
 	return metadata
 }
 

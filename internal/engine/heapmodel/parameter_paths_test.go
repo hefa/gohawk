@@ -125,9 +125,9 @@ func TestSpillPathsRequireOriginalContentsAtRead(t *testing.T) {
 		fn := pkg.Func(test.name)
 		value := ssaflow.InstructionsOf[*ssa.Return](fn)[0].Results[0]
 		path, known := AccessPathFromParameterWithin(value, fn.Params[test.parameter], proofs.NewSearchBudget(proofs.QueryBudget))
-		regionGraphs.Lock()
-		_, built := regionGraphs.entries[fn]
-		regionGraphs.Unlock()
+		cachesOf(fn).graphs.Lock()
+		_, built := cachesOf(fn).graphs.entries[fn]
+		cachesOf(fn).graphs.Unlock()
 		if built {
 			t.Fatalf("%s path discovery built a graph", test.name)
 		}

@@ -153,6 +153,24 @@ may-answers about it say yes, must-answers say no, and the graph stays
 small where it would otherwise multiply those sets through every summary
 application and join. The dump prints each widening. Nothing here guesses.
 
+## Cache lifetime
+
+The summary registry, the graph cache and the call-cycle inventory belong to
+one SSA program. buildssa builds a program per package, and every cache key is
+a function of that program, so nothing cached for one package is read while
+analyzing another. The caches are released once the package's buildssa result
+is unreachable; the summary provider and the lifecycle pass bind that lifetime
+with `heapmodel.BindPassProgram`. A weak table keyed by the program could not
+do this, because cached graphs and summaries point back into the program.
+
+The caches used to be process-wide. A long-lived driver, such as the
+golangci-lint plugin or the fuzz target, then kept every package it analyzed:
+3,000 small packages left about 2 GB in use. The registry's size limit was
+process-wide too, so a package analyzed late in a run could see fewer callee
+summaries than the same package analyzed early. go vet analyzes each package
+in its own process and saw neither problem. A program nobody binds, such as
+one a test builds directly, keeps its caches for the life of the process.
+
 ## Determinism under concurrent analyzers
 
 The graph cache and the summary registry are shared by every analyzer that

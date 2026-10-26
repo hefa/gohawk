@@ -116,6 +116,7 @@ type GraphEvidence struct {
 // refreshing one. Tracing must not change inference by warming the graph cache.
 // Callers should skip this query entirely when observation is disabled.
 func CachedGraphEvidence(function *ssa.Function) GraphEvidence {
+	regionGraphs := &cachesOf(function).graphs
 	regionGraphs.Lock()
 	element, found := regionGraphs.entries[function]
 	if !found {

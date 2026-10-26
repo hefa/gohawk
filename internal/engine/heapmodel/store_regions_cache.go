@@ -28,14 +28,15 @@ import (
 // all of them; functions of packages already analyzed fall out of the cache.
 const regionGraphCache = 128
 
-var regionGraphs = struct {
+// regionGraphCacheState is one program's graph cache.
+type regionGraphCacheState struct {
 	sync.Mutex
 	order   *list.List
 	entries map[*ssa.Function]*list.Element
 	// dependents indexes the cached graphs by the callee summaries they
 	// consulted.
 	dependents map[*ssa.Function]map[*regionGraphEntry]bool
-}{order: list.New(), entries: map[*ssa.Function]*list.Element{}, dependents: map[*ssa.Function]map[*regionGraphEntry]bool{}}
+}
 
 // regionGraphEntry is one cached graph. Its graph is nil while the build
 // is in progress, and concurrent lookups wait for done before reading it.
@@ -77,6 +78,7 @@ func regionsOfFunction(function *ssa.Function) *regionGraph {
 	if function == nil || len(function.Blocks) == 0 {
 		return &regionGraph{}
 	}
+	regionGraphs := &cachesOf(function).graphs
 	for {
 		regionGraphs.Lock()
 		element, ok := regionGraphs.entries[function]
@@ -119,11 +121,12 @@ func regionsOfFunction(function *ssa.Function) *regionGraph {
 // happened before the check and is seen here, or finds the entry indexed
 // and evicts it.
 func cacheRegionGraph(entry *regionGraphEntry, graph *regionGraph) {
+	regionGraphs := &cachesOf(entry.function).graphs
 	regionGraphs.Lock()
 	defer regionGraphs.Unlock()
 	defer entry.finishLocked()
 	if entry.stale || !consultedStillCurrent(graph) {
-		removeIndexedEntryLocked(entry)
+		regionGraphs.removeIndexedEntryLocked(entry)
 		return
 	}
 	entry.graph = graph
@@ -145,7 +148,7 @@ func cacheRegionGraph(entry *regionGraphEntry, graph *regionGraph) {
 		if oldest.Value.(*regionGraphEntry).graph == nil { //nolint:forcetypeassert // The list holds only entries.
 			break
 		}
-		evictLocked(oldest.Value.(*regionGraphEntry)) //nolint:forcetypeassert // The list holds only entries.
+		regionGraphs.evictLocked(oldest.Value.(*regionGraphEntry)) //nolint:forcetypeassert // The list holds only entries.
 	}
 }
 
@@ -174,6 +177,7 @@ func summaryKeys(callee *ssa.Function) []*ssa.Function {
 // function's summary, then drops the summaries projected on demand from
 // those graphs and evicts their dependents in turn.
 func invalidateDependents(function *ssa.Function) {
+	regionGraphs := &cachesOf(function).graphs
 	pending := []*ssa.Function{function}
 	for len(pending) > 0 {
 		next := pending[0]
@@ -182,7 +186,7 @@ func invalidateDependents(function *ssa.Function) {
 		var evicted []*ssa.Function
 		for entry := range regionGraphs.dependents[next] {
 			evicted = append(evicted, entry.function)
-			evictLocked(entry)
+			regionGraphs.evictLocked(entry)
 		}
 		delete(regionGraphs.dependents, next)
 		regionGraphs.Unlock()
@@ -196,8 +200,8 @@ func invalidateDependents(function *ssa.Function) {
 
 // evictLocked removes an entry from the cache and its index. The caller
 // holds the cache lock.
-func evictLocked(entry *regionGraphEntry) {
-	removeIndexedEntryLocked(entry)
+func (regionGraphs *regionGraphCacheState) evictLocked(entry *regionGraphEntry) {
+	regionGraphs.removeIndexedEntryLocked(entry)
 	if entry.graph == nil {
 		return
 	}
@@ -210,7 +214,7 @@ func evictLocked(entry *regionGraphEntry) {
 // cache slot. An older build must not remove its replacement. The caller holds
 // the cache lock and separately owns dependency cleanup and build notification:
 // eviction does not finish a build that is still running.
-func removeIndexedEntryLocked(entry *regionGraphEntry) {
+func (regionGraphs *regionGraphCacheState) removeIndexedEntryLocked(entry *regionGraphEntry) {
 	entry.stale = true
 	if element, ok := regionGraphs.entries[entry.function]; ok && element.Value == entry {
 		delete(regionGraphs.entries, entry.function)

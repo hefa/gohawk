@@ -78,9 +78,9 @@ func TestCallCycleInventoryPolicies(t *testing.T) {
 	if reach := reachableCallees(pkg.Func("foreign")); len(reach) != 0 {
 		t.Fatalf("cycle discovery crossed package boundary: %v", reach)
 	}
-	callCycleReach.Lock()
-	foreignMetadata := callCycleReach.metadata[foreign]
-	callCycleReach.Unlock()
+	cachesOf(foreign).cycles.Lock()
+	foreignMetadata := cachesOf(foreign).cycles.metadata[foreign]
+	cachesOf(foreign).cycles.Unlock()
 	if foreignMetadata != nil {
 		t.Fatal("cycle discovery scanned a foreign body")
 	}

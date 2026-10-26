@@ -38,6 +38,7 @@ func run(pass *analysis.Pass) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	heapmodel.BindPassProgram(pass)
 	summaries := make(Summaries, len(functions))
 	callbacks := newCallbackInference(pass, summaries)
 	marker := &SummarizedPackage{}

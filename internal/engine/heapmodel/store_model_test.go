@@ -276,9 +276,9 @@ func untouched() *int { return new(int) }
 	if allocations := testing.AllocsPerRun(100, func() { CachedGraphEvidence(function) }); allocations != 0 {
 		t.Fatalf("cache miss allocated: %v", allocations)
 	}
-	regionGraphs.Lock()
-	_, found := regionGraphs.entries[function]
-	regionGraphs.Unlock()
+	cachesOf(function).graphs.Lock()
+	_, found := cachesOf(function).graphs.entries[function]
+	cachesOf(function).graphs.Unlock()
 	if found {
 		t.Fatal("observation published a graph")
 	}
@@ -318,15 +318,15 @@ func TestCachedGraphEvidenceBuilding(t *testing.T) {
 func body() {}
 `)
 	function := pkg.Func("body")
-	regionGraphs.Lock()
-	element := regionGraphs.order.PushFront(&regionGraphEntry{function: function})
-	regionGraphs.entries[function] = element
-	regionGraphs.Unlock()
+	cachesOf(function).graphs.Lock()
+	element := cachesOf(function).graphs.order.PushFront(&regionGraphEntry{function: function})
+	cachesOf(function).graphs.entries[function] = element
+	cachesOf(function).graphs.Unlock()
 	t.Cleanup(func() {
-		regionGraphs.Lock()
-		delete(regionGraphs.entries, function)
-		regionGraphs.order.Remove(element)
-		regionGraphs.Unlock()
+		cachesOf(function).graphs.Lock()
+		delete(cachesOf(function).graphs.entries, function)
+		cachesOf(function).graphs.order.Remove(element)
+		cachesOf(function).graphs.Unlock()
 	})
 	if got := CachedGraphEvidence(function); !got.Cached || !got.Building || got.BuildReason != GraphBuildUnknown {
 		t.Fatalf("in-progress graph presented as complete: %+v", got)

@@ -7,6 +7,7 @@ import (
 	"github.com/kojah/gohawk/internal/analysis/passes/concurrencyfacts"
 	"github.com/kojah/gohawk/internal/analysis/passes/lifecyclefacts"
 	"github.com/kojah/gohawk/internal/analysis/passes/resultfacts"
+	"github.com/kojah/gohawk/internal/engine/heapmodel"
 	proofs "github.com/kojah/gohawk/internal/engine/proof"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/buildssa"
@@ -67,6 +68,9 @@ func (selection Selection) Provider(pass *analysis.Pass) *Provider {
 	if pass == nil {
 		return provider
 	}
+	// The heap model's caches for this package go once buildssa's result
+	// does, so a long-lived driver does not keep every package it analyzed.
+	heapmodel.BindPassProgram(pass)
 	if selection.requirements.Results {
 		provider.results, _ = pass.ResultOf[resultfacts.Analyzer].(*resultfacts.Engine)
 	}
