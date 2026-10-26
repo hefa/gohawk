@@ -1,0 +1,24 @@
+name: Issue triage
+
+# Label every issue opened by someone other than the repository owner as
+# "awaiting triage", so new reports from contributors are easy to find.
+# Issues the owner opens are planning notes and skip the queue.
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    if: github.event.issue.user.login != github.repository_owner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add awaiting triage label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: gh issue edit "$NUMBER" --repo "$REPO" --add-label "awaiting triage"
