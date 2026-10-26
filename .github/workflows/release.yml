@@ -80,6 +80,11 @@ jobs:
           echo "Timed out waiting for CI on $GITHUB_SHA" >&2
           exit 1
 
+  # Native macOS and Windows tests run only here and on manual dispatch.
+  platforms:
+    needs: validate
+    uses: ./.github/workflows/platforms.yml
+
   binaries:
     needs: validate
     runs-on: ubuntu-latest
@@ -150,7 +155,7 @@ jobs:
           retention-days: 1
 
   release:
-    needs: binaries
+    needs: [binaries, platforms]
     runs-on: ubuntu-latest
     timeout-minutes: 5
 

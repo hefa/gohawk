@@ -206,84 +206,6 @@ jobs:
       - name: Analyze with Go ${{ matrix.go-version }}
         run: scripts/test-toolchain-compatibility.sh "$RUNNER_TEMP/gohawk" "${{ matrix.go-version }}"
 
-  windows:
-    name: Windows tests
-    runs-on: windows-latest
-    timeout-minutes: 30
-    env:
-      GOWORK: 'off'
-      GOTOOLCHAIN: local
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: .go-version
-          cache-dependency-path: go.sum
-
-      # Generated Go is committed and checked by static-fast on Linux. Only the
-      # ignored documentation used by architecture tests needs generating here.
-      - name: Generate Markdown references
-        run: go run ./tools/gendocs -generated-markdown
-
-      - name: Run native Windows tests
-        run: go test -p=2 -parallel=4 ./...
-
-      - name: Build Windows CLI
-        run: go build -o "$env:RUNNER_TEMP/gohawk.exe" .
-
-      - name: Smoke-test analysis in a path with spaces
-        shell: pwsh
-        run: |
-          $binary = Join-Path $env:RUNNER_TEMP 'gohawk.exe'
-          $fixture = Join-Path $env:RUNNER_TEMP 'gohawk smoke'
-          New-Item -ItemType Directory -Path $fixture | Out-Null
-          @'
-          module example.com/windows-smoke
-
-          go 1.26.0
-          '@ | Set-Content -Path (Join-Path $fixture 'go.mod')
-          @'
-          package sample
-
-          import "os"
-
-          func leak(path string) error {
-              file, err := os.Open(path)
-              if err != nil {
-                  return err
-              }
-              _ = file
-              return nil
-          }
-
-          func safe(path string) error {
-              file, err := os.Open(path)
-              if err != nil {
-                  return err
-              }
-              defer file.Close()
-              return nil
-          }
-          '@ | Set-Content -Path (Join-Path $fixture 'sample.go')
-          Set-Location $fixture
-          # Findings intentionally produce exit 3; validate it before parsing JSON.
-          $PSNativeCommandUseErrorActionPreference = $false
-          $output = & $binary -enable=resourcelifetime -json ./...
-          if ($LASTEXITCODE -ne 3) {
-              throw "Expected diagnostic exit 3, got $LASTEXITCODE`: $output"
-          }
-          $diagnostics = ($output -join "`n") | ConvertFrom-Json
-          $findings = @($diagnostics.'example.com/windows-smoke'.resourcelifetime)
-          if ($findings.Count -ne 1 -or $findings[0].category -ne 'resourcelifetime/missing-release') {
-              throw "Expected exactly one resource leak and no finding for safe: $output"
-          }
-          # The runner otherwise propagates the expected native exit code 3.
-          exit 0
-
   exhaustive-cli:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -322,7 +244,7 @@ jobs:
   # work runs concurrently in the jobs above.
   test:
     if: ${{ always() }}
-    needs: [static-fast, lint, vulnerability, dogfood, race, plugin, coverage, compatibility, windows, exhaustive-cli, skills]
+    needs: [static-fast, lint, vulnerability, dogfood, race, plugin, coverage, compatibility, exhaustive-cli, skills]
     runs-on: ubuntu-latest
     steps:
       - name: Check verification results
@@ -335,11 +257,10 @@ jobs:
           PLUGIN_RESULT: ${{ needs.plugin.result }}
           COVERAGE_RESULT: ${{ needs.coverage.result }}
           COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
-          WINDOWS_RESULT: ${{ needs.windows.result }}
           EXHAUSTIVE_CLI_RESULT: ${{ needs.exhaustive-cli.result }}
           SKILLS_RESULT: ${{ needs.skills.result }}
         run: |
-          for result in "$STATIC_FAST_RESULT" "$LINT_RESULT" "$VULNERABILITY_RESULT" "$DOGFOOD_RESULT" "$RACE_RESULT" "$PLUGIN_RESULT" "$COVERAGE_RESULT" "$COMPATIBILITY_RESULT" "$WINDOWS_RESULT" "$EXHAUSTIVE_CLI_RESULT"; do
+          for result in "$STATIC_FAST_RESULT" "$LINT_RESULT" "$VULNERABILITY_RESULT" "$DOGFOOD_RESULT" "$RACE_RESULT" "$PLUGIN_RESULT" "$COVERAGE_RESULT" "$COMPATIBILITY_RESULT" "$EXHAUSTIVE_CLI_RESULT"; do
             if [[ "$result" != "success" ]]; then
               exit 1
             fi

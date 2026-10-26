@@ -1,0 +1,167 @@
+name: Platforms
+
+# Native macOS and Windows runners are slow and costly, so these jobs do not
+# run on every push. The release workflow calls this one before publishing,
+# and it can be started by hand from the Actions tab or with
+# `gh workflow run platforms.yml --ref <branch>`.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS tests
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+
+      # Generated Go is committed and checked by static-fast on Linux. Only the
+      # ignored documentation used by architecture tests needs generating here.
+      - name: Generate Markdown references
+        run: go run ./tools/gendocs -generated-markdown
+
+      - name: Run native macOS tests
+        run: go test -p=2 -parallel=4 ./...
+
+      - name: Build macOS CLI
+        run: go build -o "$RUNNER_TEMP/gohawk" .
+
+      - name: Smoke-test analysis in a path with spaces
+        run: |
+          fixture="$RUNNER_TEMP/gohawk smoke"
+          mkdir -p "$fixture"
+          cat > "$fixture/go.mod" <<'EOF'
+          module example.com/macos-smoke
+
+          go 1.26.0
+          EOF
+          cat > "$fixture/sample.go" <<'EOF'
+          package sample
+
+          import "os"
+
+          func leak(path string) error {
+              file, err := os.Open(path)
+              if err != nil {
+                  return err
+              }
+              _ = file
+              return nil
+          }
+
+          func safe(path string) error {
+              file, err := os.Open(path)
+              if err != nil {
+                  return err
+              }
+              defer file.Close()
+              return nil
+          }
+          EOF
+          cd "$fixture"
+          # Findings intentionally produce exit 3; validate it before parsing JSON.
+          status=0
+          output="$("$RUNNER_TEMP/gohawk" -enable=resourcelifetime -json ./...)" || status=$?
+          if [[ "$status" -ne 3 ]]; then
+            echo "Expected diagnostic exit 3, got $status: $output" >&2
+            exit 1
+          fi
+          count="$(jq -r '[."example.com/macos-smoke".resourcelifetime[] | select(.category == "resourcelifetime/missing-release")] | length' <<< "$output")"
+          total="$(jq -r '."example.com/macos-smoke".resourcelifetime | length' <<< "$output")"
+          if [[ "$count" -ne 1 || "$total" -ne 1 ]]; then
+            echo "Expected exactly one resource leak and no finding for safe: $output" >&2
+            exit 1
+          fi
+
+  windows:
+    name: Windows tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+
+      # Generated Go is committed and checked by static-fast on Linux. Only the
+      # ignored documentation used by architecture tests needs generating here.
+      - name: Generate Markdown references
+        run: go run ./tools/gendocs -generated-markdown
+
+      - name: Run native Windows tests
+        run: go test -p=2 -parallel=4 ./...
+
+      - name: Build Windows CLI
+        run: go build -o "$env:RUNNER_TEMP/gohawk.exe" .
+
+      - name: Smoke-test analysis in a path with spaces
+        shell: pwsh
+        run: |
+          $binary = Join-Path $env:RUNNER_TEMP 'gohawk.exe'
+          $fixture = Join-Path $env:RUNNER_TEMP 'gohawk smoke'
+          New-Item -ItemType Directory -Path $fixture | Out-Null
+          @'
+          module example.com/windows-smoke
+
+          go 1.26.0
+          '@ | Set-Content -Path (Join-Path $fixture 'go.mod')
+          @'
+          package sample
+
+          import "os"
+
+          func leak(path string) error {
+              file, err := os.Open(path)
+              if err != nil {
+                  return err
+              }
+              _ = file
+              return nil
+          }
+
+          func safe(path string) error {
+              file, err := os.Open(path)
+              if err != nil {
+                  return err
+              }
+              defer file.Close()
+              return nil
+          }
+          '@ | Set-Content -Path (Join-Path $fixture 'sample.go')
+          Set-Location $fixture
+          # Findings intentionally produce exit 3; validate it before parsing JSON.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $output = & $binary -enable=resourcelifetime -json ./...
+          if ($LASTEXITCODE -ne 3) {
+              throw "Expected diagnostic exit 3, got $LASTEXITCODE`: $output"
+          }
+          $diagnostics = ($output -join "`n") | ConvertFrom-Json
+          $findings = @($diagnostics.'example.com/windows-smoke'.resourcelifetime)
+          if ($findings.Count -ne 1 -or $findings[0].category -ne 'resourcelifetime/missing-release') {
+              throw "Expected exactly one resource leak and no finding for safe: $output"
+          }
+          # The runner otherwise propagates the expected native exit code 3.
+          exit 0
