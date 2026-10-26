@@ -1,0 +1,74 @@
+name: Stress
+
+# The stress suite is too slow for every push. The release workflow calls it
+# before publishing, and it can be started by hand from the Actions tab or
+# with `gh workflow run stress.yml --ref <branch>`. It runs on Linux only:
+# the memory watcher reads /proc, and the analysis it stresses does not
+# depend on the platform.
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: How long to fuzz, such as 15m or 1h
+        required: false
+        default: 15m
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  pathological:
+    name: Pathological code
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+
+      - name: Generate Go sources
+        uses: ./.github/actions/prepare-hyrule
+
+      - name: Analyze pathological code under memory limits
+        run: make stress
+
+  fuzz:
+    name: Analyzer fuzzing
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: go.sum
+
+      - name: Generate Go sources
+        uses: ./.github/actions/prepare-hyrule
+
+      - name: Fuzz every analyzer over generated programs
+        env:
+          STRESS_FUZZTIME: ${{ inputs.fuzztime || '15m' }}
+        run: make stress-fuzz STRESS_FUZZTIME="$STRESS_FUZZTIME"
+
+      # A failing input is saved here; commit it to replay the failure with
+      # `make stress`.
+      - name: Upload failing fuzz inputs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-failures
+          path: internal/testsupport/stress/testdata/fuzz
+          if-no-files-found: ignore

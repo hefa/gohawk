@@ -44,7 +44,7 @@ endif
 endif
 
 .PHONY: help build fmt fmt-check generate generate-examples generated-check mod-verify lint deadcode vuln test \
-	test-exhaustive test-race ci-policy-check vet coverage plugin-test dogfood skills-check verify-static verify ci benchmark site-install \
+	test-exhaustive test-race ci-policy-check vet coverage plugin-test dogfood skills-check verify-static verify ci benchmark stress stress-fuzz site-install \
 	precision-regression site-check site-build site-audit site-audit-production site-shot site-links site-links-external site-review generated-sync
 
 help:
@@ -62,6 +62,8 @@ help:
 		'  make coverage        Collect coverage (GitHub Actions only)' \
 		'  make ci              Run aggregate CI gates (GitHub Actions only)' \
 		'  make test-exhaustive Run the CI-only exhaustive CLI subprocess matrix' \
+		'  make stress          Run the release stress cases under memory limits (Linux)' \
+		'  make stress-fuzz     Fuzz every analyzer over generated programs (STRESS_FUZZTIME=15m)' \
 		'  make verify          Run the complete local verification suite in parallel' \
 		'                       Timings are shown by default; set VERIFY_TIMINGS=0 to hide them' \
 		'  make dogfood         Build and run gohawk on itself' \
@@ -116,6 +118,19 @@ test:
 
 test-exhaustive:
 	$(GO) test -tags=exhaustive ./internal/cli -run '^TestCLIIntegrationExhaustive$$' -count=1
+
+# The stress suite runs before each release rather than on every push: known
+# pathological code and oversized generated programs under memory limits, then
+# a time-boxed fuzz run of every analyzer. A fuzz failure is saved under the
+# package's testdata/fuzz directory and replays with an ordinary stress run.
+STRESS_PACKAGE := ./internal/testsupport/stress
+STRESS_FUZZTIME ?= 15m
+
+stress:
+	$(GO) test -tags=stress -count=1 -v -timeout 40m $(STRESS_PACKAGE)
+
+stress-fuzz:
+	$(GO) test -tags=stress -run '^$$' -fuzz '^FuzzAnalyzers$$' -fuzztime $(STRESS_FUZZTIME) $(STRESS_PACKAGE)
 
 ci-policy-check:
 	python3 scripts/ci_policy_test.py

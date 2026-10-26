@@ -53,6 +53,8 @@ pages containing handwritten prose and generated sections remain tracked.
   disposable Go writes off the shared disk while profiling and validating.
 - [Debugging reference](debugging-reference.md) — the SSA, fact, and
   evidence-trace dumps, and how to read them.
+- [Stress suite](stress-suite.md) — the release-only memory-limited runs on
+  pathological code and the analyzer fuzz target.
 - [Decisions](decisions/) — why a policy exists, one file per decision.
 
 ## Measurements and history

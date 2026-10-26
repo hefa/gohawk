@@ -85,6 +85,12 @@ jobs:
     needs: validate
     uses: ./.github/workflows/platforms.yml
 
+  # So does the stress suite: pathological code under memory limits and a
+  # time-boxed fuzz run of every analyzer.
+  stress:
+    needs: validate
+    uses: ./.github/workflows/stress.yml
+
   binaries:
     needs: validate
     runs-on: ubuntu-latest
@@ -155,7 +161,7 @@ jobs:
           retention-days: 1
 
   release:
-    needs: [binaries, platforms]
+    needs: [binaries, platforms, stress]
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
